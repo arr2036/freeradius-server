@@ -348,63 +348,239 @@ static int do_connect(int *out, char const *file, char const *server)
 	memcpy(buffer, &magic, sizeof(magic));
 	memset(buffer + sizeof(magic), 0, sizeof(magic));
 
-	r = fr_channel_write(sockfd, FR_CHANNEL_INIT_ACK, buffer, 8);
-	if (r <= 0) {
-	do_close:
-		fprintf(stderr, "%s: Error in socket: %s\n",
-			progname, fr_syserror(errno));
-		close(sockfd);
-			return -1;
+	ret = fr_channel_write(fd, FR_CHANNEL_INIT_ACK, buffer, 8);
+	if (ret <= 0) {
+	error:
+		ERROR("Error in socket: %s", fr_syserror(errno));
+		talloc_free(conn);
 	}
 
-	r = fr_channel_read(sockfd, &channel, buffer + 8, 8);
-	if (r <= 0) goto do_close;
+	ret = fr_channel_read(fd, &channel, buffer + 8, 8);
+	if (ret <= 0) goto error;
 
-	if ((r != 8) || (channel != FR_CHANNEL_INIT_ACK) ||
+	if ((ret != 8) || (channel != FR_CHANNEL_INIT_ACK) ||
 	    (memcmp(buffer, buffer + 8, 8) != 0)) {
-		fprintf(stderr, "%s: Incompatible versions\n", progname);
-		close(sockfd);
+		ERROR("Incompatible versions");
 		return -1;
 	}
 
-	if (server && secret) {
-		r = do_challenge(sockfd);
-		if (r <= 0) goto do_close;
-	}
+	conn->fd = fd;
+	conn->connected = true;
 
-	*out = sockfd;
+	*out = conn;
 
 	return 0;
 }
 
-#define MAX_COMMANDS (4)
+/** Change connection to be nonblocking
+ *
+ * @param[in] conn		to set as nonblocking.
+ * @return
+ *	- 0 on success (now non-blocking).
+ *	- -1 if we couldn't change the blocking mode.
+ */
+static int conn_nonblock(radmin_conn_t *conn)
+{
+	if (fr_nonblock(conn->fd) < 0) return -1;
+	conn->nonblock = true;
+	return 0;
+}
+
+/** Add an event handler for this connection
+ *
+ * @param[in] conn		to add event handler for.
+ * @param[in] event_list	to add handler to.
+ * @return
+ *	- 0 on success.
+ *	- -1 on failure.
+ */
+static int conn_event_add(radmin_conn_t *conn, fr_event_list_t *event_list)
+{
+	if (fr_event_fd_insert(event_list, 0, conn->fd, _event_process_control, conn) < 0) {
+		ERROR("%s", fr_strerror());
+		return -1;
+	}
+	conn->event_list = event_list;
+
+	return 0;
+}
+
+/** Connect to a UNIX socket
+ *
+ * @param[out] out	Where to write new connection structure.
+ * @param[in] file	Unix socket to connect to.
+ * @return
+ *	- -1 couldn't connect to server or socket.
+ *	- 0 success.
+ */
+static int conn_connect_unix(radmin_conn_t **out, char const *file)
+{
+	radmin_conn_t *conn;
+	int fd;
+
+	/*
+	 *	FIXME: Get destination from command line, if possible?
+	 */
+	fd = fr_socket_client_unix(file, false);
+	if (fd < 0) {
+		ERROR("%s", fr_strerror());
+		if (errno == ENOENT) {
+			ERROR("Perhaps you need to run the commands:");
+			ERROR("  cd %s", RADIUS_DIR);
+			ERROR("  ln -s sites-available/control-socket sites-enabled/control-socket");
+			ERROR("and/or (re-)start the server?");
+		}
+		return -1;
+	}
+
+	if (_conn_connect(&conn, fd) < 0) {
+		close(fd);
+		return -1;
+	}
+
+	conn->server = talloc_strdup(conn, file);
+	conn->type = RADMIN_CONN_UNIX;
+
+	*out = conn;
+
+	return 0;
+}
+
+/** Connect to a remote host
+ *
+ * @param[out] out	Where to write new connection structure.
+ * @param[in] server	(fqdn or ip) to connect to.  Only file or server may be specified.
+ * @param[in] secret	we use to authenticate ourselves to the server.
+ * @return
+ *	- -1 couldn't connect to server or socket.
+ *	- 0 success.
+ */
+static int conn_connect_tcp(radmin_conn_t **out, char const *server, char const *secret)
+{
+	radmin_conn_t	*conn;
+	int		fd;
+
+	ssize_t		ret;
+
+	uint16_t	port;
+	fr_ipaddr_t	ipaddr;
+	char		*p;
+
+	char		*host = talloc_strdup(NULL, server);
+
+	p = strchr(host, ':');
+	if (!p) {
+		port = PW_RADMIN_PORT;
+	} else {
+		port = atoi(p + 1);
+		*p = '\0';
+	}
+
+	if (fr_inet_hton(&ipaddr, AF_INET, host, false) < 0) {
+		ERROR("Failed looking up host %s: %s", host, fr_syserror(errno));
+	error:
+		talloc_free(host);
+		return -1;
+	}
+
+	fd = fr_socket_client_tcp(NULL, &ipaddr, port, false);
+	if (fd < 0) {
+		ERROR("Failed opening socket %s: %s", server, fr_syserror(errno));
+		goto error;
+	}
+
+	if (_conn_connect(&conn, fd) < 0) {
+		close(fd);
+		goto error;
+	}
+
+	conn->server = talloc_strdup(conn, server);
+	conn->type = RADMIN_CONN_TCP;
+
+	if (secret) {
+		ret = conn_challenge_tcp(conn, secret);
+		if (ret <= 0) {
+			talloc_free(conn);	/* also closes fd */
+			return -1;
+		}
+	}
+
+	*out = conn;
+
+	return 0;
+}
+
+/** (Re)connect a socket
+ *
+ * @param[in] conn	to reconnect (may be set to NULL if we fail).
+ * @param[in] command	to (re)issue if we manage to connect.
+ * @return
+ *	- 0 on success.
+ *	- <0 on error.
+ */
+static int conn_reconnect(radmin_conn_t **conn, char const *command)
+{
+	radmin_conn_t *new_conn;
+
+	if (!state.batch) fprintf(stdout, "... reconnecting\n");
+
+	switch (state.active_conn->type) {
+	case RADMIN_CONN_UNIX:
+		if (conn_connect_unix(&new_conn, (*conn)->server) < 0) {
+		error:
+			(*conn)->connected = false;
+			return -1;
+		}
+		break;
+
+	case RADMIN_CONN_TCP:
+		if (conn_connect_tcp(&new_conn, (*conn)->server, (*conn)->secret) < 0) goto error;
+		break;
+
+	default:
+		assert(0);
+		return -1;
+	}
+
+	if ((*conn)->event_list) conn_event_add(new_conn, (*conn)->event_list);
+	if ((*conn)->nonblock) conn_nonblock(new_conn);
+
+	/*
+	 *	We have to destroy the old connection, removing its
+	 *	event handler, before we add the new connection.
+	 */
+	talloc_free(*conn);
+	*conn = new_conn;
+
+	if (command) command_run(*conn, command);
+
+	return 0;
+}
 
 int main(int argc, char **argv)
 {
 	int		argval;
-	bool		quiet = false;
-	int		sockfd = -1;
-	char		*line = NULL;
-	ssize_t		len;
+
 	char const	*file = NULL;
 	char const	*name = "radiusd";
-	char		*p, buffer[65536];
 	char const	*input_file = NULL;
-	FILE		*inputfp = stdin;
+	FILE		*input_fp = stdin;
 	char const	*server = NULL;
 	fr_dict_t	*dict = NULL;
 
 	char const	*radius_dir = RADIUS_DIR;
 	char const	*dict_dir = DICTDIR;
 
-	char *commands[MAX_COMMANDS];
-	int num_commands = -1;
+	char		*commands[MAX_COMMANDS];
+	int		num_commands = -1;
 
-	int exit_status = EXIT_SUCCESS;
+	TALLOC_CTX	*autofree = talloc_init("main");
+
+	int		exit_status = EXIT_SUCCESS;
 
 #ifndef NDEBUG
 	if (fr_fault_setup(getenv("PANIC_ACTION"), argv[0]) < 0) {
-		fr_perror("radmin");
+		ERROR("%s", fr_strerror());
 		exit(EXIT_FAILURE);
 	}
 #endif
@@ -423,12 +599,12 @@ int main(int argc, char **argv)
 		switch (argval) {
 		case 'd':
 			if (file) {
-				fprintf(stderr, "%s: -d and -f cannot be used together.\n", progname);
-				exit(1);
+				ERROR("-d and -f cannot be used together");
+				exit(EXIT_FAILURE);
 			}
 			if (server) {
-				fprintf(stderr, "%s: -d and -s cannot be used together.\n", progname);
-				exit(1);
+				ERROR("-d and -s cannot be used together");
+				exit(EXIT_FAILURE);
 			}
 			radius_dir = optarg;
 			break;
@@ -440,9 +616,8 @@ int main(int argc, char **argv)
 		case 'e':
 			num_commands++; /* starts at -1 */
 			if (num_commands >= MAX_COMMANDS) {
-				fprintf(stderr, "%s: Too many '-e'\n",
-					progname);
-				exit(1);
+				ERROR("Too many '-e'");
+				exit(EXIT_FAILURE);
 			}
 
 			commands[num_commands] = optarg;
@@ -479,7 +654,7 @@ int main(int argc, char **argv)
 
 		case 's':
 			if (file) {
-				fprintf(stderr, "%s: -s and -f cannot be used together.\n", progname);
+				ERROR("-s and -f cannot be used together");
 				usage(1);
 			}
 			radius_dir = NULL;
@@ -499,8 +674,8 @@ int main(int argc, char **argv)
 	 *	Mismatch between the binary and the libraries it depends on
 	 */
 	if (fr_check_lib_magic(RADIUSD_MAGIC_NUMBER) < 0) {
-		fr_perror("radmin");
-		exit(1);
+		ERROR("%s", fr_strerror());
+		exit(EXIT_FAILURE);
 	}
 
 	if (radius_dir) {
@@ -521,21 +696,21 @@ int main(int argc, char **argv)
 		 *	Need to read in the dictionaries, else we may get
 		 *	validation errors when we try and parse the config.
 		 */
-		if (fr_dict_from_file(NULL, &dict, dict_dir, FR_DICTIONARY_FILE, "radius") < 0) {
-			fr_perror("radmin");
+		if (fr_dict_from_file(autofree, &dict, dict_dir, FR_DICTIONARY_FILE, "radius") < 0) {
+			ERROR("%s", fr_strerror());
 			exit(64);
 		}
 
 		if (fr_dict_read(dict, radius_dir, FR_DICTIONARY_FILE) == -1) {
-			fr_perror("radmin");
+			ERROR("%s", fr_strerror());
 			exit(64);
 		}
 
 		cs = cf_section_alloc(NULL, "main", NULL);
-		if (!cs) exit(1);
+		if (!cs) exit(EXIT_FAILURE);
 
 		if (cf_file_read(cs, buffer) < 0) {
-			fprintf(stderr, "%s: Errors reading or parsing %s\n", progname, buffer);
+			ERROR("Errors reading or parsing %s", buffer);
 			talloc_free(cs);
 			usage(1);
 		}
@@ -561,12 +736,12 @@ int main(int argc, char **argv)
 			rcode = cf_pair_parse(subcs, "socket",
 					      FR_ITEM_POINTER(PW_TYPE_STRING, &file), NULL, T_DOUBLE_QUOTED_STRING);
 			if (rcode < 0) {
-				fprintf(stderr, "%s: Failed parsing listen section 'socket'\n", progname);
-				exit(1);
+				ERROR("Failed parsing listen section 'socket'");
+				exit(EXIT_FAILURE);
 			}
 
 			if (!file) {
-				fprintf(stderr, "%s: No path given for socket\n", progname);
+				ERROR("No path given for socket");
 				usage(1);
 			}
 
@@ -581,16 +756,16 @@ int main(int argc, char **argv)
 			rcode = cf_pair_parse(subcs, "uid",
 					      FR_ITEM_POINTER(PW_TYPE_STRING, &uid_name), NULL, T_DOUBLE_QUOTED_STRING);
 			if (rcode < 0) {
-				fprintf(stderr, "%s: Failed parsing listen section 'uid'\n", progname);
-				exit(1);
+				ERROR("Failed parsing listen section 'uid'");
+				exit(EXIT_FAILURE);
 			}
 
 			if (!uid_name) break;
 
 			pwd = getpwnam(uid_name);
 			if (!pwd) {
-				fprintf(stderr, "%s: Failed getting UID for user %s: %s\n", progname, uid_name, strerror(errno));
-				exit(1);
+				ERROR("Failed getting UID for user %s: %s", uid_name, strerror(errno));
+				exit(EXIT_FAILURE);
 			}
 
 			if (uid != pwd->pw_uid) continue;
@@ -598,17 +773,16 @@ int main(int argc, char **argv)
 			rcode = cf_pair_parse(subcs, "gid",
 					      FR_ITEM_POINTER(PW_TYPE_STRING, &gid_name), NULL, T_DOUBLE_QUOTED_STRING);
 			if (rcode < 0) {
-				fprintf(stderr, "%s: Failed parsing listen section 'gid'\n", progname);
-				exit(1);
+				ERROR("Failed parsing listen section 'gid'");
+				exit(EXIT_FAILURE);
 			}
 
 			if (!gid_name) break;
 
 			grp = getgrnam(gid_name);
 			if (!grp) {
-				fprintf(stderr, "%s: Failed resolving gid of group %s: %s\n",
-					progname, gid_name, strerror(errno));
-				exit(1);
+				ERROR("Failed resolving gid of group %s: %s", gid_name, strerror(errno));
+				exit(EXIT_FAILURE);
 			}
 
 			if (gid != grp->gr_gid) continue;
@@ -617,8 +791,8 @@ int main(int argc, char **argv)
 		}
 
 		if (!file) {
-			fprintf(stderr, "%s: Could not find control socket in %s\n", progname, buffer);
-			exit(1);
+			ERROR("Could not find control socket in %s", buffer);
+			exit(EXIT_FAILURE);
 		}
 	}
 
