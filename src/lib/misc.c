@@ -88,7 +88,7 @@ int fr_unset_signal(int sig)
         struct sigaction act;
 
         memset(&act, 0, sizeof(act));
-        act.sa_flags = 0; 
+        act.sa_flags = 0;
         sigemptyset(&act.sa_mask);
         act.sa_handler = SIG_DFL;
 
@@ -494,6 +494,25 @@ int fr_blocking(UNUSED int fd)
 	return -1;
 }
 #endif
+
+/** Disable sigpipe
+ *
+ * Only works for BSD, but Linux allows us to mask SIGPIPE, so that's fine.
+ *
+ * @param[in] fd to disable sigpipe for.
+ */
+int fr_sigpipe_disable(int fd)
+{
+#ifdef SO_NOSIGPIPE
+	int set = 1;
+
+	if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (void *)&set, sizeof(int)) < 0) {
+		fr_strerror_printf("Failed disabling sigpipe: %s", fr_syserror(errno));
+		return -1;
+	}
+#endif
+	return 0;
+}
 
 /** Write out a vector to a file descriptor
  *

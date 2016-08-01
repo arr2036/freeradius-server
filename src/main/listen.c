@@ -89,8 +89,8 @@ static rad_listen_t *listen_alloc(TALLOC_CTX *ctx, RAD_LISTEN_TYPE type, rad_pro
 static rad_listen_t *listen_parse(listen_config_t *lc);
 
 #ifdef WITH_COMMAND_SOCKET
-static int command_init_recv(rad_listen_t *listener);
-static int command_tcp_send(rad_listen_t *listener, REQUEST *request);
+static int control_init_recv(rad_listen_t *listener);
+static int control_tcp_send(rad_listen_t *listener, REQUEST *request);
 #endif
 
 static rad_protocol_t master_listen[];
@@ -1003,8 +1003,8 @@ static int dual_tcp_accept(rad_listen_t *listener)
 
 #  ifdef WITH_COMMAND_SOCKET
 	if (this->type == RAD_LISTEN_COMMAND) {
-		this->recv = command_init_recv;
-		this->send = command_tcp_send;
+		this->recv = control_init_recv;
+		this->send = control_tcp_send;
 	} else
 #  endif
 	{
@@ -2547,7 +2547,7 @@ static int proxy_socket_decode(UNUSED rad_listen_t *listener, REQUEST *request)
 }
 #endif
 
-#include "command.c"
+#include "control.c"
 
 #define NO_LISTENER { .name = "undefined", }
 
@@ -2650,14 +2650,14 @@ static rad_protocol_t master_listen[] = {
 		.name = "control",
 		.inst_size = sizeof(fr_command_socket_t),
 		.tls = false,
-		.parse = command_socket_parse,
-		.open = command_socket_open,
-		.recv = command_domain_accept,
-		.send = command_domain_send,
-		.print = command_socket_print,
+		.parse = control_socket_parse,
+		.open = control_socket_open,
+		.recv = control_domain_accept,
+		.send = control_domain_send,
+		.print = control_socket_print,
 		.debug = common_packet_debug,
-		.encode = command_socket_encode,
-		.decode = command_socket_decode
+		.encode = control_socket_encode,
+		.decode = control_socket_decode
 	  },
 #else
 	NO_LISTENER,

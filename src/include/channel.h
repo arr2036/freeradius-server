@@ -37,14 +37,15 @@ typedef enum fr_channel_type_t {
 	FR_CHANNEL_INIT_ACK,
 	FR_CHANNEL_AUTH_CHALLENGE,
 	FR_CHANNEL_AUTH_RESPONSE,
-	FR_CHANNEL_WANT_MORE,
-	FR_CHANNEL_NOTIFY
+	FR_CHANNEL_NOTIFY,
+	FR_CHANNEL_UNKNOWN
 } fr_channel_type_t;
 
-typedef enum fr_channel_result_t {
-	FR_CHANNEL_FAIL = 0,
-	FR_CHANNEL_SUCCESS
-} fr_channel_result_t;
+typedef enum fr_channel_status_t {
+	FR_CHANNEL_STATUS_FAIL = -1,		//!< Failed reading/writing to channel.
+	FR_CHANNEL_STATUS_SUCCESS = 0,		//!< read/wrote a complete buffer.
+	FR_CHANNEL_STATUS_AGAIN,		//!< Need to be called again to complete operation.
+} fr_channel_status_t;
 
 typedef enum fr_channel_notify_t {
 	FR_NOTIFY_NONE = 0,
@@ -52,20 +53,16 @@ typedef enum fr_channel_notify_t {
 	FR_NOTIFY_UNBUFFERED
 } fr_channel_notify_t;
 
-#define COMMAND_BUFFER_SIZE (1024)
+typedef struct fr_channel_buff fr_channel_buff_t;
 
-typedef struct fr_cs_buffer_t {
-	int		auth;
-	int		mode;
-	ssize_t		offset;
-	ssize_t		next;
-	char		buffer[COMMAND_BUFFER_SIZE];
-} fr_cs_buffer_t;
+extern FR_NAME_NUMBER fr_channel_type_table[];
 
-ssize_t fr_channel_drain(int fd, fr_channel_type_t *pchannel, void *inbuf, size_t buflen, uint8_t **outbuf, ssize_t *have_read);
-ssize_t fr_channel_read(int fd, fr_channel_type_t *pchannel, void *buffer, size_t buflen);
-ssize_t fr_channel_write(int fd, fr_channel_type_t channel, void const *buffer, size_t buflen);
+fr_channel_status_t	fr_channel_read(uint8_t const **out, size_t *outlen, fr_channel_type_t *channel,
+					int fd, fr_channel_buff_t *buff);
 
+ssize_t			fr_channel_write(int fd, fr_channel_type_t channel, void const *in, size_t inlen);
+
+fr_channel_buff_t	*fr_channel_buff_alloc(TALLOC_CTX *ctx, size_t preallocate);
 #ifdef __cplusplus
 }
 #endif

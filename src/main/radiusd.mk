@@ -7,6 +7,7 @@ SOURCES := acct.c \
     files.c \
     interpreter.c \
     listen.c \
+    command.c \
     mainconfig.c \
     modules.c \
     modcall.c \

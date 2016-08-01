@@ -374,6 +374,7 @@ bool		is_zero(char const *value);
 
 int		fr_nonblock(int fd);
 int		fr_blocking(int fd);
+int		fr_sigpipe_disable(int fd);
 ssize_t		fr_writev(int fd, struct iovec[], int iovcnt, struct timeval *timeout);
 
 ssize_t		fr_utf8_to_ucs2(uint8_t *out, size_t outlen, char const *in, size_t inlen);

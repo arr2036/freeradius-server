@@ -43,10 +43,8 @@ RCSID("$Id$")
 
 #if defined(HAVE_READLINE_READLINE_H)
 #  include <readline/readline.h>
-#  define USE_READLINE (1)
 #elif defined(HAVE_READLINE_H)
 #  include <readline.h>
-#  define USE_READLINE (1)
 #endif /* !defined(HAVE_READLINE_H) */
 
 #ifdef HAVE_READLINE_HISTORY
@@ -65,6 +63,10 @@ RCSID("$Id$")
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/md5.h>
 #include <freeradius-devel/channel.h>
+
+#define MAX_COMMANDS (4)
+
+#define RADMIN_EVENT_LOOP_EXIT_SUCCESS	INT32_MAX
 
 /*
  *	For configuration file stuff.
@@ -96,7 +98,9 @@ typedef struct radmin_conn {
 	bool			nonblock;		//!< Whether this connection should operate in
 							//!< non-blocking mode.
 	bool			connected;		//!< Whether this connection is currently connected.
-	fr_cs_buffer_t		co;
+
+	fr_channel_buff_t	*buff;
+
 	radmin_conn_type_t	type;			//!< Type of connection.
 } radmin_conn_t;
 
@@ -118,7 +122,7 @@ typedef struct radmin_state {
 /** Main radmin state
  *
  */
-//static radmin_state_t state;
+static radmin_state_t state;
 
 /*
  *	The rest of this is because the conffile.c, etc. assume
@@ -127,9 +131,7 @@ typedef struct radmin_state {
  */
 main_config_t main_config;
 
-static bool echo = false;
-static char const *secret = "testing123";
-static bool unbuffered = false;
+static int conn_reconnect(radmin_conn_t **conn, char const *command);
 
 static void NEVER_RETURNS usage(int status)
 {
@@ -148,197 +150,394 @@ static void NEVER_RETURNS usage(int status)
 	exit(status);
 }
 
-static int client_socket(char const *server)
+static void _line_read(char *line);
+
+/** Redraw the prompt
+ *
+ */
+static inline void radmin_prompt_redraw(void)
 {
-	int sockfd;
-	uint16_t port;
-	fr_ipaddr_t ipaddr;
-	char *p, buffer[1024];
+	fflush(stderr);
+	fflush(stdout);
 
-	strlcpy(buffer, server, sizeof(buffer));
+	/*
+	 *	Trash anything pending on the prompt...
+	 */
+	rl_line_buffer[0] = '\0';
+	rl_end = 0;
+	rl_point = 0;
+	rl_forced_update_display();
 
-	p = strchr(buffer, ':');
-	if (!p) {
-		port = PW_RADMIN_PORT;
-	} else {
-		port = atoi(p + 1);
-		*p = '\0';
-	}
-
-	if (fr_inet_hton(&ipaddr, AF_INET, buffer, false) < 0) {
-		fprintf(stderr, "%s: Failed looking up host %s: %s\n",
-			progname, buffer, fr_syserror(errno));
-		exit(1);
-	}
-
-	sockfd = fr_socket_client_tcp(NULL, &ipaddr, port, false);
-	if (sockfd < 0) {
-		fprintf(stderr, "%s: Failed opening socket %s: %s\n",
-			progname, server, fr_syserror(errno));
-		exit(1);
-	}
-
-	return sockfd;
+	/*
+	 *	Re-prompt by reinstalling the callback
+	 *	This is how other projects do it too...
+	 */
+	rl_callback_handler_install("radmin> ", _line_read);
 }
 
-static ssize_t do_challenge(int sockfd)
+/** Read a challenge on a newly TCP connected socket, and respond
+ *
+ * @param[in] conn	to process the challenge on.
+ * @param[in] secret	to use to formulate our response.
+ * @return
+ *	- -1 on failure.
+ *	- 1 call again.
+ *	- 0 on success.
+ */
+static ssize_t conn_challenge_tcp(radmin_conn_t *conn, char const *secret)
 {
-	ssize_t r;
-	fr_channel_type_t channel;
-	uint8_t challenge[16];
-
-	challenge[0] = 0x00;
+	size_t			ret;
+	size_t			len;
+	uint8_t const		*challenge;
+	uint8_t			digest[MD5_DIGEST_LENGTH];
+	fr_channel_type_t	channel;
 
 	/*
 	 *	When connecting over a socket, the server challenges us.
 	 */
-	r = fr_channel_read(sockfd, &channel, challenge, sizeof(challenge));
-	if (r <= 0) return r;
+	switch (fr_channel_read(&challenge, &len, &channel, conn->fd, conn->buff)) {
+	case FR_CHANNEL_STATUS_FAIL:
+		ERROR("Failed to read challenge: %s", fr_strerror());
+		return -1;
 
-	if ((r != 16) || (channel != FR_CHANNEL_AUTH_CHALLENGE)) {
-		fprintf(stderr, "%s: Failed to read challenge.\n",
-			progname);
-		exit(1);
+	case FR_CHANNEL_STATUS_AGAIN:
+		return 1;
+
+	case FR_CHANNEL_STATUS_SUCCESS:
+		break;
 	}
 
-	fr_hmac_md5(challenge, (uint8_t const *) secret, strlen(secret),
-		    challenge, sizeof(challenge));
+	if ((len != 16) || (channel != FR_CHANNEL_AUTH_CHALLENGE)) {
+		ERROR("Failed to read challenge");
+		return -1;
+	}
 
-	r = fr_channel_write(sockfd, FR_CHANNEL_AUTH_RESPONSE, challenge, sizeof(challenge));
-	if (r <= 0) return r;
+	fr_hmac_md5(digest, (uint8_t const *)secret, strlen(secret), challenge, (size_t)len);
+
+	ret = fr_channel_write(conn->fd, FR_CHANNEL_AUTH_RESPONSE, digest, sizeof(digest));
+	if (ret <= 0) return -1;
+
+	talloc_free(conn->secret);
+	conn->secret = talloc_strdup(conn, secret);
 
 	/*
 	 *	If the server doesn't like us, it just closes the
 	 *	socket.  So we don't look for an ACK.
 	 */
-
-	return r;
+	return ret;
 }
 
-
-/*
- *	Returns -1 on failure.  0 on connection failed.  +1 on OK.
+/** Read data from all channels on a socket
+ *
+ * @param[in,out] conn	to read from and to store data in.
+ * @return
+ *	- -1 on failure.
+ *	- 0 on connection failed.
+ *	- +1 on OK.
  */
-static ssize_t flush_channels(int sockfd, char *buffer, size_t bufsize)
+static fr_channel_status_t conn_channels_drain(radmin_conn_t *conn)
 {
-	ssize_t r;
-	uint32_t status;
-	fr_channel_type_t channel;
+	size_t			len;
+	fr_channel_type_t	channel;
+	uint8_t	const		*data;
+	fr_channel_status_t	status;
 
-	while (true) {
+	for (;;) {
 		uint32_t notify;
 
-		r = fr_channel_read(sockfd, &channel, buffer, bufsize - 1);
-		if (r <= 0) return r;
+		status = fr_channel_read(&data, &len, &channel, conn->fd, conn->buff);
+		switch (status) {
+		case FR_CHANNEL_STATUS_FAIL:
+			ERROR("%s", fr_strerror());
+			/* FALL-THROUGH */
 
-		buffer[r] = '\0';	/* for C strings */
+		case FR_CHANNEL_STATUS_AGAIN:
+			return status;
+
+		case FR_CHANNEL_STATUS_SUCCESS:	/* Got to do stuff... */
+			break;
+		}
 
 		switch (channel) {
 		case FR_CHANNEL_STDOUT:
-			fprintf(stdout, "%s", buffer);
+			fprintf(stdout, "%.*s", (int)len, data);
 			break;
 
 		case FR_CHANNEL_STDERR:
-			fprintf(stderr, "ERROR: %s", buffer);
+			fprintf(stderr, "%.*s", (int)len, data);
 			break;
 
 		case FR_CHANNEL_CMD_STATUS:
-			if (r < 4) return 1;
+			if (len < 4) return FR_CHANNEL_STATUS_FAIL;
 
-			memcpy(&status, buffer, sizeof(status));
+			memcpy(&status, data, sizeof(status));
 			status = ntohl(status);
 			return status;
 
 		case FR_CHANNEL_NOTIFY:
-			if (r < 4) return -1;
+			if (len < 4) return FR_CHANNEL_STATUS_FAIL;
 
-			memcpy(&notify, buffer, sizeof(notify));
+			memcpy(&notify, data, sizeof(notify));
 			notify = ntohl(notify);
 
-			if (notify == FR_NOTIFY_UNBUFFERED) unbuffered = true;
-			if (notify == FR_NOTIFY_BUFFERED) unbuffered = false;
+			/*
+			 *	Switch streaming mode on/off
+			 */
+			if (notify == FR_NOTIFY_UNBUFFERED) state.unbuffered = true;
+			else if (notify == FR_NOTIFY_BUFFERED) state.unbuffered = false;
 
 			break;
 
 		default:
-			fprintf(stderr, "Unexpected response %02x\n", channel);
-			return -1;
+			ERROR("Unexpected response %02x", channel);
+			return FR_CHANNEL_STATUS_FAIL;
 		}
 	}
 
 	/* never gets here */
 }
 
-
-/*
- *	Returns -1 on failure.  0 on connection failed.  +1 on OK.
+/** (re-)run a command
+ *
+ * @param[in] conn	to run the command on.
+ * @param[in] command	to run (may be NULL, in which case we re-run the last command);
+ * @return
+ *	- <= 0 on connection failure.
+ *	- >0 on success (the number of bytes written to the socket).
  */
-static ssize_t run_command(int sockfd, char const *command,
-			   char *buffer, size_t bufsize)
+static ssize_t command_run(radmin_conn_t *conn, char const *command)
 {
-	ssize_t r;
+	ssize_t slen;
 
-	if (echo) {
-		fprintf(stdout, "%s\n", command);
+	/*
+	 *	Yes, this is meant to be pointer comparison.
+	 */
+	if (command != conn->last_command) {
+		if (state.echo) DEBUG("%s", command);
+
+		if (conn->last_command) TALLOC_FREE(conn->last_command);
+		conn->last_command = talloc_strdup(NULL, command);
 	}
 
 	/*
 	 *	Write the text to the socket.
 	 */
-	r = fr_channel_write(sockfd, FR_CHANNEL_STDIN, command, strlen(command));
-	if (r <= 0) return r;
+	slen = fr_channel_write(conn->fd, FR_CHANNEL_STDIN,
+				conn->last_command, talloc_array_length(conn->last_command) - 1);
+	if (slen <= 0) return slen;
 
-	return flush_channels(sockfd, buffer, bufsize);
+	return slen;
 }
 
-static int do_connect(int *out, char const *file, char const *server)
+/** Callback for readline
+ *
+ * Read an actual line from stdin.  Installed as a callback for readline.
+ *
+ * @note This is not called in batch mode, so we assume it's an interactive terminal.
+ *
+ * @param[in] line	readline read from stdin.
+ */
+static void _line_read(char *line)
 {
-	int sockfd;
-	ssize_t r;
-	fr_channel_type_t channel;
-	char buffer[65536];
-
-	uint32_t magic;
+	char		*p;
+	size_t		ret;
 
 	/*
-	 *	Close stale file descriptors
+	 *	Strip off leading spaces.
 	 */
-	if (*out != -1) {
-		close(*out);
-		*out = -1;
-	}
+	for (p = line; *p != '\0'; p++) {
+		switch (*p) {
+		case ' ':
+		case '\t':
+			line = p + 1;
+			continue;
 
-	if (file) {
-		/*
-		 *	FIXME: Get destination from command line, if possible?
-		 */
-		sockfd = fr_socket_client_unix(file, false);
-		if (sockfd < 0) {
-			fr_perror("radmin");
-			if (errno == ENOENT) {
-					fprintf(stderr, "Perhaps you need to run the commands:");
-					fprintf(stderr, "\tcd /etc/raddb\n");
-					fprintf(stderr, "\tln -s sites-available/control-socket "
-						"sites-enabled/control-socket\n");
-					fprintf(stderr, "and then re-start the server?\n");
-			}
-			return -1;
+		case '#':		/* Comment, ignore the line */
+			return;
+
+		default:
+			break;
 		}
-	} else {
-		sockfd = client_socket(server);
+		break;
 	}
 
 	/*
-	 *	Only works for BSD, but Linux allows us
-	 *	to mask SIGPIPE, so that's fine.
+	 *	Strip off CR / LF
 	 */
-#ifdef SO_NOSIGPIPE
-	{
-		int set = 1;
+	for (p = line; *p != '\0'; p++) {
+		switch (*p) {
+		case '\r':
+		case '\n':
+			*p = '\0';
+			break;
 
-		setsockopt(sockfd, SOL_SOCKET, SO_NOSIGPIPE, (void *)&set, sizeof(int));
+		default:
+			continue;
+		}
 	}
+
+	if (*line == '\0') {
+		if (!state.active_conn->connected) conn_reconnect(&state.active_conn, state.active_conn->last_command);
+	redraw:
+		radmin_prompt_redraw();
+		return;
+	}
+
+#ifdef USE_READLINE_HISTORY
+	add_history(line);
 #endif
+
+	/*
+	 *	Process radmin specific local commands
+	 */
+	if (strcmp(line, "reconnect") == 0) {
+		conn_reconnect(&state.active_conn, NULL);
+		goto redraw;
+	}
+
+	if (strncmp(line, "secret ", 7) == 0) {
+		if (state.active_conn->type == RADMIN_CONN_TCP) {
+			conn_challenge_tcp(state.active_conn, line + 7);
+		} else {
+			DEBUG("'secret' has no effect when connected on a unix socket");
+		}
+		goto redraw;
+	}
+	if ((strcmp(line, "exit") == 0) ||
+	    (strcmp(line, "quit") == 0)) {
+		fr_event_loop_exit(state.event_list, RADMIN_EVENT_LOOP_EXIT_SUCCESS);
+		return;
+	}
+
+	if ((state.active_conn->type == RADMIN_CONN_TCP) && !state.active_conn->secret) {
+		ERROR("You must issue 'secret <SECRET>' before running any commands");
+		goto redraw;
+	}
+
+	ret = command_run(state.active_conn, line);
+	if (ret > 0) return;
+
+	if (conn_reconnect(&state.active_conn, line) < 0) {
+		fr_event_loop_exit(state.event_list, EXIT_FAILURE);
+		return;
+	}
+}
+
+/** Process data we received on stdin
+ *
+ * This is a wrapper around readline's rlm_callback_read_char, which calls
+ * the input callback we installed earlier.
+ */
+static void _event_process_stdin(UNUSED fr_event_list_t *event_list, UNUSED int fd, UNUSED void *ctx)
+{
+	rl_callback_read_char();
+}
+
+/** Streaming control data is available from the control socket
+ *
+ * This can be the response to a command, or proper streaming log messages
+ * from a debug connection.
+ */
+static void _event_process_control(UNUSED fr_event_list_t *event_list, UNUSED int fd, void *ctx)
+{
+	ssize_t		ret;
+	radmin_conn_t	*conn = talloc_get_type_abort(ctx, radmin_conn_t);
+	radmin_conn_t	*new_conn = conn;
+
+	ret = conn_channels_drain(conn);
+	if (ret < 0) {
+		/*
+		 *	We got told there was data, but when we went to
+		 *	read it the socket had gone away...
+		 *
+		 *	Reconnect, and re-issue the last command.
+		 */
+		if (conn_reconnect(&new_conn, conn->last_command) < 0) {
+			ERROR("Failed reconnecting to server.  Hit return to retry...");
+			goto finish;
+		}
+
+		/*
+		 *	...and update the active connection (to the new one).
+		 */
+		if (state.active_conn == conn) state.active_conn = new_conn;
+
+		/*
+		 *	...and now we return (we should get called again).
+		 */
+		goto finish;
+	}
+
+	TALLOC_FREE(conn->last_command);	/* Clear the last command (it was successful) */
+
+finish:
+	radmin_prompt_redraw();
+}
+
+/** Close a file descriptor
+ *
+ * @param[in] conn to close.
+ */
+static int conn_close(radmin_conn_t *conn)
+{
+	if (conn->fd >= 0) {
+		if (conn->event_list) fr_event_fd_delete(conn->event_list, 0, conn->fd);
+		close(conn->fd);
+		conn->fd = -1;
+		conn->connected = false;
+	}
+	return 0;
+}
+
+/** Close the file descriptor associated with a connection
+ *
+ * @param[in] conn to free.
+ * @return 0;
+ */
+static int _conn_free(radmin_conn_t *conn)
+{
+	conn_close(conn);
+	return 0;
+}
+
+/** Common connection function for both files and sockets
+ *
+ * @note Don't call this function directly.
+ *
+ * On success, the new conn takes ownership of the fd, and will close the fd when
+ * the new conn is freed.
+ *
+ * @param[out] out	Where to write a pointer to the new connection.
+ * @param[in] fd	File descriptor to connect on.
+ * @return
+ *	- -1 couldn't connect to server or socket.
+ *	- 0 success.
+ */
+static int _conn_connect(radmin_conn_t **out, int fd)
+{
+	ssize_t			ret;
+	size_t			len;
+
+	char			buffer[8];
+	fr_channel_type_t	channel;
+	uint32_t		magic;
+	uint8_t	const		*data;
+
+	radmin_conn_t		*conn;
+
+	*out = NULL;
+
+	MEM(conn = talloc_zero(NULL, radmin_conn_t));
+	conn->fd = -1;
+	talloc_set_destructor(conn, _conn_free);
+
+	MEM(conn->buff = fr_channel_buff_alloc(conn, 1024));
+
+	if (fr_sigpipe_disable(fd) < 0) {
+		ERROR("%s", fr_strerror());
+		talloc_free(conn);
+		return -1;
+	}
 
 	/*
 	 *	Set up the initial header data.
@@ -348,22 +547,31 @@ static int do_connect(int *out, char const *file, char const *server)
 	memcpy(buffer, &magic, sizeof(magic));
 	memset(buffer + sizeof(magic), 0, sizeof(magic));
 
+	DEBUG3("Sending version check challenge");
 	ret = fr_channel_write(fd, FR_CHANNEL_INIT_ACK, buffer, 8);
 	if (ret <= 0) {
 	error:
-		ERROR("Error in socket: %s", fr_syserror(errno));
+		ERROR("Failed writing init_ack to socket: %s", fr_syserror(errno));
 		talloc_free(conn);
+		return -1;
 	}
 
-	ret = fr_channel_read(fd, &channel, buffer + 8, 8);
-	if (ret <= 0) goto error;
+	/* Blocking read */
+	DEBUG3("Waiting for version check response...");
+	switch (fr_channel_read(&data, &len, &channel, fd, conn->buff)) {
+	case FR_CHANNEL_STATUS_SUCCESS:
+		break;
 
-	if ((ret != 8) || (channel != FR_CHANNEL_INIT_ACK) ||
-	    (memcmp(buffer, buffer + 8, 8) != 0)) {
+	default:
+		goto error;
+	}
+
+	if ((len != 8) || (channel != FR_CHANNEL_INIT_ACK) || (memcmp(data, buffer, len) != 0)) {
 		ERROR("Incompatible versions");
 		return -1;
 	}
 
+	DEBUG3("Version check OK");
 	conn->fd = fd;
 	conn->connected = true;
 
@@ -421,10 +629,10 @@ static int conn_connect_unix(radmin_conn_t **out, char const *file)
 	/*
 	 *	FIXME: Get destination from command line, if possible?
 	 */
-	fd = fr_socket_client_unix(file, false);
+	fd = fr_socket_client_unix(file, false);		/* We change to non-blocking later */
 	if (fd < 0) {
 		ERROR("%s", fr_strerror());
-		if (errno == ENOENT) {
+		if ((errno == ENOENT) && !state.active_conn) {	/* Not a reconnection */
 			ERROR("Perhaps you need to run the commands:");
 			ERROR("  cd %s", RADIUS_DIR);
 			ERROR("  ln -s sites-available/control-socket sites-enabled/control-socket");
@@ -437,6 +645,17 @@ static int conn_connect_unix(radmin_conn_t **out, char const *file)
 		close(fd);
 		return -1;
 	}
+
+#ifdef SO_PEERCRED
+	{
+		struct ucred ucred;
+		size_t len;
+
+		if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) == 0) {
+			DEBUG("Connected to PID %u", ucred.pid);
+		}
+	}
+#endif
 
 	conn->server = talloc_strdup(conn, file);
 	conn->type = RADMIN_CONN_UNIX;
@@ -522,7 +741,9 @@ static int conn_reconnect(radmin_conn_t **conn, char const *command)
 {
 	radmin_conn_t *new_conn;
 
-	if (!state.batch) fprintf(stdout, "... reconnecting\n");
+	DEBUG("Reconnecting...");
+
+	conn_close(*conn);
 
 	switch (state.active_conn->type) {
 	case RADMIN_CONN_UNIX:
@@ -552,6 +773,7 @@ static int conn_reconnect(radmin_conn_t **conn, char const *command)
 	talloc_free(*conn);
 	*conn = new_conn;
 
+	DEBUG("...reconnected");
 	if (command) command_run(*conn, command);
 
 	return 0;
@@ -619,12 +841,13 @@ int main(int argc, char **argv)
 				ERROR("Too many '-e'");
 				exit(EXIT_FAILURE);
 			}
+			state.batch = true;
 
 			commands[num_commands] = optarg;
 			break;
 
 		case 'E':
-			echo = true;
+			state.echo = true;
 			break;
 
 		case 'f':
@@ -640,16 +863,11 @@ int main(int argc, char **argv)
 			if (strcmp(optarg, "-") != 0) {
 				input_file = optarg;
 			}
-			quiet = true;
+			state.batch = true;
 			break;
 
 		case 'n':
 			name = optarg;
-			break;
-
-		case 'q':
-			quiet = true;
-			if (rad_debug_lvl > 0) rad_debug_lvl--;
 			break;
 
 		case 's':
@@ -662,7 +880,12 @@ int main(int argc, char **argv)
 			break;
 
 		case 'S':
-			secret = NULL;
+			//secret = NULL;
+			break;
+
+		case 'q':
+			if (rad_debug_lvl > 0) rad_debug_lvl--;
+			break;
 
 		case 'x':
 			rad_debug_lvl++;
@@ -687,6 +910,7 @@ int main(int argc, char **argv)
 		char const	*gid_name = NULL;
 		struct passwd	*pwd;
 		struct group	*grp;
+		char		buffer[1024];
 
 		file = NULL;	/* MUST read it from the conffile now */
 
@@ -796,205 +1020,115 @@ int main(int argc, char **argv)
 		}
 	}
 
+/*
 	if (input_file) {
-		inputfp = fopen(input_file, "r");
-		if (!inputfp) {
-			fprintf(stderr, "%s: Failed opening %s: %s\n", progname, input_file, fr_syserror(errno));
-			exit(1);
+		input_fp = fopen(input_file, "r");
+		if (!input_fp) {
+			ERROR("Failed opening %s: %s", input_file, fr_syserror(errno));
+			exit(EXIT_FAILURE);
 		}
 	}
+*/
 
-	if (!file && !server) {
-		fprintf(stderr, "%s: Must use one of '-d' or '-f' or '-s'\n",
-			progname);
-		exit(1);
+	if ((!file && !server) || (file && server)) {
+		ERROR("Must use one of '-d' or '-f' or '-s'");
+		exit(EXIT_FAILURE);
 	}
 
 	/*
 	 *	Check if stdin is a TTY only if input is from stdin
 	 */
-	if (input_file && !quiet && !isatty(STDIN_FILENO)) quiet = true;
+	if (input_file && !state.batch && !isatty(STDIN_FILENO)) state.batch = true;
 
-#ifdef USE_READLINE
-	if (!quiet) {
+	if (!state.batch) {
 #ifdef USE_READLINE_HISTORY
 		using_history();
 #endif
 		rl_bind_key('\t', rl_insert);
 	}
-#endif
 
 	/*
 	 *	Prevent SIGPIPEs from terminating the process
 	 */
 	signal(SIGPIPE, SIG_IGN);
 
-	if (do_connect(&sockfd, file, server) < 0) exit(1);
+	/*
+	 *	Connect to the server
+	 */
+	if (server) {
+		if (conn_connect_tcp(&state.active_conn, server, NULL) < 0) exit(EXIT_FAILURE);
+	} else if (file) {
+		if (conn_connect_unix(&state.active_conn, file) < 0) exit(EXIT_FAILURE);
+	} else {
+		exit(EXIT_FAILURE);
+	}
 
 	/*
-	 *	Run commans from the command-line.
+	 *	Run commands from the command-line (non-interactively).
 	 */
 	if (num_commands >= 0) {
+		ssize_t ret;
 		int i;
 
 		for (i = 0; i <= num_commands; i++) {
-			len = run_command(sockfd, commands[i], buffer, sizeof(buffer));
-			if (len < 0) exit(1);
+			/* Write the command */
+			ret = command_run(state.active_conn, commands[i]);
+			if (ret <= 0) exit(EXIT_FAILURE);
 
-			if (len == FR_CHANNEL_FAIL) exit_status = EXIT_FAILURE;
-		}
-
-		if (unbuffered) {
-			while (true) flush_channels(sockfd, buffer, sizeof(buffer));
-		}
-
-		exit(exit_status);
-	}
-
-	if (!quiet) {
-		printf("%s - FreeRADIUS Server administration tool.\n", radmin_version);
-		printf("Copyright (C) 2008-2016 The FreeRADIUS server project and contributors.\n");
-		printf("There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A\n");
-		printf("PARTICULAR PURPOSE.\n");
-		printf("You may redistribute copies of FreeRADIUS under the terms of the\n");
-		printf("GNU General Public License v2.\n");
-	}
-
-	/*
-	 *	FIXME: Do login?
-	 */
-
-	while (1) {
-		int retries;
-
-#ifndef USE_READLINE
-		if (!quiet) {
-			printf("radmin> ");
-			fflush(stdout);
-		}
-#else
-		if (!quiet) {
-			line = readline("radmin> ");
-
-			if (!line) break;
-
-			if (!*line) {
-				free(line);
-				continue;
+			/* Read the response */
+			if (ret > 0) {
+				ret = conn_channels_drain(state.active_conn);
+				if (ret < 0) exit(EXIT_FAILURE);
 			}
 
-#ifdef USE_READLINE_HISTORY
-			add_history(line);
-#endif
-		} else		/* quiet, or no readline */
-#endif
-		{
-			line = fgets(buffer, sizeof(buffer), inputfp);
-			if (!line) break;
-
-			p = strchr(buffer, '\n');
-			if (!p) {
-				fprintf(stderr, "%s: Input line too long\n",
-					progname);
-				exit(1);
+			if (ret == FR_CHANNEL_STATUS_FAIL) {
+				goto finish;
+				exit_status = EXIT_FAILURE;
 			}
-
-			*p = '\0';
-
-			/*
-			 *	Strip off leading spaces.
-			 */
-			for (p = line; *p != '\0'; p++) {
-				if ((p[0] == ' ') ||
-				    (p[0] == '\t')) {
-					line = p + 1;
-					continue;
-				}
-
-				if (p[0] == '#') {
-					line = NULL;
-					break;
-				}
-
-				break;
-			}
-
-			/*
-			 *	Comments: keep going.
-			 */
-			if (!line) continue;
-
-			/*
-			 *	Strip off CR / LF
-			 */
-			for (p = line; *p != '\0'; p++) {
-				if ((p[0] == '\r') ||
-				    (p[0] == '\n')) {
-					p[0] = '\0';
-					break;
-				}
-			}
-		}
-
-		if (strcmp(line, "reconnect") == 0) {
-			if (do_connect(&sockfd, file, server) < 0) exit(1);
-			line = NULL;
-			continue;
-		}
-
-		if (memcmp(line, "secret ", 7) == 0) {
-			if (!secret) {
-				secret = line + 7;
-				do_challenge(sockfd);
-			}
-			line = NULL;
-			continue;
 		}
 
 		/*
-		 *	Exit, done, etc.
+		 *	One of the commands requires us to do a blocking
+		 *	read until we're told to exit.
+		 *
+		 *	Probably non-interactive streaming debug.
 		 */
-		if ((strcmp(line, "exit") == 0) ||
-		    (strcmp(line, "quit") == 0)) {
-			break;
+		if (state.unbuffered) while (true) conn_channels_drain(state.active_conn);
+	/*
+	 *	Run commands from the user (interactively)
+	 */
+	} else {
+		DEBUG("%s", radmin_version);
+		DEBUG("FreeRADIUS Server administration tool.");
+		DEBUG("Copyright (C) 2008-2016 The FreeRADIUS server project and contributors.");
+		DEBUG("There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A.");
+		DEBUG("PARTICULAR PURPOSE.");
+		DEBUG("You may redistribute copies of FreeRADIUS under the terms of the.");
+		DEBUG("GNU General Public License v2.");
+
+		rl_callback_handler_install("radmin> ", _line_read);
+		radmin_prompt_redraw();
+
+		/* Install handler for stdin */
+		MEM(state.event_list = fr_event_list_create(autofree, NULL));
+		if (fr_event_fd_insert(state.event_list, 0, fileno(stdin), _event_process_stdin, NULL) < 0) {
+			ERROR("%s", fr_strerror());
+			exit(EXIT_FAILURE);
 		}
+		conn_event_add(state.active_conn, state.event_list);
+		conn_nonblock(state.active_conn);
 
-		if (server && !secret) {
-			fprintf(stderr, "ERROR: You must enter 'secret <SECRET>' before running any commands\n");
-			line = NULL;
-			continue;
-		}
+		/* Enter the event loop */
+		exit_status = fr_event_loop(state.event_list);
 
-		retries = 0;
-	retry:
-		len = run_command(sockfd, line, buffer, sizeof(buffer));
-		if (len < 0) {
-			if (!quiet) fprintf(stderr, "... reconnecting ...\n");
+		/* Event loop needs a non-zero exit status value to actually exit */
+		if (exit_status == RADMIN_EVENT_LOOP_EXIT_SUCCESS) exit_status = 0;
+		rl_callback_handler_remove();
+ 	}
+finish:
+	if (input_fp != stdin) fclose(input_fp);
 
-			if (do_connect(&sockfd, file, server) < 0) {
-				exit(1);
-			}
-
-			retries++;
-			if (retries < 2) goto retry;
-
-			fprintf(stderr, "Failed to connect to server\n");
-			exit(1);
-
-		} else if (len == FR_CHANNEL_SUCCESS) {
-			break;
-
-		} else if (len == FR_CHANNEL_FAIL) {
-			exit_status = EXIT_FAILURE;
-		}
-	}
-
-	fprintf(stdout, "\n");
-
-	if (inputfp != stdin) fclose(inputfp);
-
-	talloc_free(dict);
+	talloc_free(autofree);
 
 	return exit_status;
 }
-
