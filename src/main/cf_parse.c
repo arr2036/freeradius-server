@@ -813,7 +813,6 @@ static void cf_section_parse_warn(CONF_SECTION *cs)
  * @param[in] cs		to parse.
  * @param[in] name		of subsection to parse.
  * @param[in] type		flags.
- * @param[in] subcs_vars	CONF_PARSER definitions for the subsection.
  * @param[in] subcs_size	size of subsection structures to allocate.
  * @return
  *	- 0 on success.
@@ -821,7 +820,7 @@ static void cf_section_parse_warn(CONF_SECTION *cs)
  *	- -2 if a deprecated #CONF_ITEM was found.
  */
 static int cf_subsection_parse(TALLOC_CTX *ctx, void *out, CONF_SECTION *cs,
-			       char const *name, fr_type_t type, CONF_PARSER const *subcs_vars, size_t subcs_size)
+			       char const *name, fr_type_t type, size_t subcs_size)
 {
 	CONF_SECTION	*subcs;
 	int		count, i, ret;
@@ -843,10 +842,10 @@ static int cf_subsection_parse(TALLOC_CTX *ctx, void *out, CONF_SECTION *cs,
 		 *	Each subsection struct should be allocated separately so
 		 *	we have a clean talloc hierarchy.
 		 */
-	 	if (!subcs_size) return cf_section_parse(ctx, out, subcs, subcs_vars);
+	 	if (!subcs_size) return cf_section_parse(ctx, out, subcs);
 
 		MEM(buff = talloc_array(ctx, uint8_t, subcs_size));
-		ret = cf_section_parse(buff, buff, subcs, subcs_vars);
+		ret = cf_section_parse(buff, buff, subcs);
 		if (ret < 0) {
 			talloc_free(buff);
 			return -1;
@@ -884,7 +883,7 @@ static int cf_subsection_parse(TALLOC_CTX *ctx, void *out, CONF_SECTION *cs,
 		MEM(buff = talloc_zero_array(array, uint8_t, subcs_size));
 		array[i] = buff;
 
-		ret = cf_section_parse(buff, buff, subcs, subcs_vars);
+		ret = cf_section_parse(buff, buff, subcs);
 		if (ret < 0) {
 			talloc_free(array);
 			return ret;
@@ -902,28 +901,17 @@ static int cf_subsection_parse(TALLOC_CTX *ctx, void *out, CONF_SECTION *cs,
  *				Usually the same as base, unless base is a nested struct.
  * @param[out] base		pointer to a struct to fill with data.
  * @param[in] cs		to parse.
- * @param[in] variables 	mappings between struct fields and #CONF_ITEM s.
  * @return
  *	- 0 on success.
  *	- -1 on general error.
  *	- -2 if a deprecated #CONF_ITEM was found.
  */
-int cf_section_parse(TALLOC_CTX *ctx, void *base, CONF_SECTION *cs, CONF_PARSER const *variables)
+int cf_section_parse(TALLOC_CTX *ctx, void *base, CONF_SECTION *cs)
 {
 	int		ret = 0;
-	int		i;
 	void		*data;
 	bool		*is_set = NULL;
-
-	/*
-	 *	Hack for partially parsed sections.
-	 */
-	if (!variables) {
-		cf_log_info(cs, "%.*s}", cs->depth, parse_spaces);
-		return 0;
-	}
-
-	cs->variables = variables; /* this doesn't hurt anything */
+	CONF_DATA const	*rule_cd = NULL;
 
 	if (!cs->name2) {
 		cf_log_info(cs, "%.*s%s {", cs->depth, parse_spaces, cs->name1);
@@ -931,29 +919,32 @@ int cf_section_parse(TALLOC_CTX *ctx, void *base, CONF_SECTION *cs, CONF_PARSER 
 		cf_log_info(cs, "%.*s%s %s {", cs->depth, parse_spaces, cs->name1, cs->name2);
 	}
 
-	/*
-	 *	Pre-allocate the config structure to hold default values
-	 */
-	if (cf_section_parse_init(cs, base, variables) < 0) return -1;
+	while ((rule_cd = cf_data_find_next(cs, rule_cd, CONF_PARSER, CF_IDENT_ANY))) {
+		CONF_PARSER *rule;
 
-	/*
-	 *	Handle the known configuration parameters.
-	 */
-	for (i = 0; variables[i].name != NULL; i++) {
+		rule = cf_data_value(rule_cd);
+
+		/*
+		 *	Pre-allocate the config structure to hold default values
+		 */
+		if (cf_section_parse_init(cs, base, rule) < 0) return -1;
+
+
 		/*
 		 *	Handle subsections specially
 		 */
-		if (FR_BASE_TYPE(variables[i].type) == FR_TYPE_SUBSECTION) {
-			if (cf_subsection_parse(ctx, (uint8_t *)base + variables[i].offset, cs,
-						variables[i].name, variables[i].type,
-						variables[i].subcs, variables[i].subcs_size) < 0) goto finish;
+		if (FR_BASE_TYPE(rule->type) == FR_TYPE_SUBSECTION) {
+			if (cf_section_rules_push(cs, rule->subcs) < 0) goto finish;
+			if (cf_subsection_parse(ctx, (uint8_t *)base + rule->offset, cs,
+						rule->name, rule->type,
+						rule->subcs_size) < 0) goto finish;
 			continue;
 		} /* else it's a CONF_PAIR */
 
-		if (variables[i].data) {
-			data = variables[i].data; /* prefer this. */
+		if (rule->data) {
+			data = rule->data; /* prefer this. */
 		} else if (base) {
-			data = ((uint8_t *)base) + variables[i].offset;
+			data = ((uint8_t *)base) + rule->offset;
 		} else if (!rad_cond_assert(0)) {
 			ret = -1;
 			goto finish;
@@ -963,16 +954,14 @@ int cf_section_parse(TALLOC_CTX *ctx, void *base, CONF_SECTION *cs, CONF_PARSER 
 		 *	Get pointer to where we need to write out
 		 *	whether the pointer was set.
 		 */
-		if (variables[i].type & FR_TYPE_IS_SET) {
-			is_set = variables[i].data ? variables[i].is_set_ptr :
-						     ((uint8_t *)base) + variables[i].is_set_offset;
+		if (rule->type & FR_TYPE_IS_SET) {
+			is_set = rule->data ? rule->is_set_ptr : ((uint8_t *)base) + rule->is_set_offset;
 		}
 
 		/*
 		 *	Parse the pair we found, or a default value.
 		 */
-		ret = cf_pair_parse(ctx, cs, variables[i].name, variables[i].type, data,
-				    variables[i].dflt, variables[i].quote);
+		ret = cf_pair_parse(ctx, cs, rule->name, rule->type, data, rule->dflt, rule->quote);
 		switch (ret) {
 		case 1:		/* Used default (or not present) */
 			if (is_set) *is_set = false;
@@ -987,29 +976,16 @@ int cf_section_parse(TALLOC_CTX *ctx, void *base, CONF_SECTION *cs, CONF_PARSER 
 			goto finish;
 
 		case -2:	/* Deprecated CONF ITEM */
-			if ((variables[i + 1].offset && (variables[i + 1].offset == variables[i].offset)) ||
-			    (variables[i + 1].data && (variables[i + 1].data == variables[i].data))) {
-				cf_log_err(&(cs->item), "Replace \"%s\" with \"%s\"", variables[i].name,
-					   variables[i + 1].name);
+			if (((rule + 1)->offset && ((rule + 1)->offset == rule->offset)) ||
+			    ((rule + 1)->data && ((rule + 1)->data == rule->data))) {
+				cf_log_err(&(cs->item), "Replace \"%s\" with \"%s\"", rule->name,
+					   (rule + 1)->name);
 			}
 			goto finish;
 		}
-	} /* for all variables in the configuration section */
-
-	/*
-	 *	Ensure we have a proper terminator, type so we catch
-	 *	missing terminators reliably
-	 */
-	rad_cond_assert(variables[i].type == conf_term.type);
+	}
 
 	cs->base = base;
-
-	/*
-	 *	Hack for partially parsed sections.  We don't print
-	 *	out the final "}", that will be printed out when the
-	 *	caller re-calls us with 'variable=NULL'.  And, we don't warn about unused
-	 */
-	if (variables[i].offset == 1) return ret;
 
 	/*
 	 *	Warn about items in the configuration which weren't
@@ -1029,27 +1005,27 @@ finish:
  *
  * @param[out] base start of structure to write #vp_tmpl_t s to.
  * @param[in] cs CONF_SECTION to fixup.
- * @param[in] variables Array of CONF_PARSER structs to process.
  * @return
  *	- 0 on success.
  *	- -1 on failure (parse errors etc...).
  */
-int cf_section_parse_pass2(void *base, CONF_SECTION *cs, CONF_PARSER const variables[])
+int cf_section_parse_pass2(void *base, CONF_SECTION *cs)
 {
+	CONF_DATA const *rule_cd = NULL;
 
-	int i;
-
-	/*
-	 *	Handle the known configuration parameters.
-	 */
-	for (i = 0; variables[i].name != NULL; i++) {
+	while ((rule_cd = cf_data_find_next(cs, rule_cd, CONF_PARSER, CF_IDENT_ANY))) {
 		bool		attribute, multi, is_tmpl, is_xlat;
 		CONF_PAIR	*cp;
+		CONF_PARSER	*rule;
 		void		*data;
 
-		char const	*name = variables[i].name;
-		int		type = variables[i].type;
+		char const	*name;
+		int		type;
 
+		rule = cf_data_value(rule_cd);
+
+		name = rule->name;
+		type = rule->type;
 		is_tmpl = (type & FR_TYPE_TMPL);
 		is_xlat = (type & FR_TYPE_XLAT);
 		attribute = (type & FR_TYPE_ATTRIBUTE);
@@ -1074,24 +1050,22 @@ int cf_section_parse_pass2(void *base, CONF_SECTION *cs, CONF_PARSER const varia
 				size_t		j, len;
 				uint8_t		**array;
 
-				array = (uint8_t **)((uint8_t *)base) + variables[i].offset;
+				array = (uint8_t **)((uint8_t *)base) + rule->offset;
 				len = talloc_array_length(array);
 
 				for (j = 0; j < len; j++) {
-					if (cf_section_parse_pass2(array[j], subcs,
-								   (CONF_PARSER const *)variables[i].dflt) < 0) {
+					if (cf_section_parse_pass2(array[j], subcs) < 0) {
 						return -1;
 					}
 				}
 				continue;
-			} else if (variables[i].subcs_size) {
-				subcs_base = (*(uint8_t **)((uint8_t *)base) + variables[i].offset);
+			} else if (rule->subcs_size) {
+				subcs_base = (*(uint8_t **)((uint8_t *)base) + rule->offset);
 			} else {
-				subcs_base = (uint8_t *)base + variables[i].offset;
+				subcs_base = (uint8_t *)base + rule->offset;
 			}
 
-			if (cf_section_parse_pass2(subcs_base, subcs,
-						   (CONF_PARSER const *)variables[i].dflt) < 0) return -1;
+			if (cf_section_parse_pass2(subcs_base, subcs) < 0) return -1;
 
 			continue;
 		}
@@ -1106,8 +1080,8 @@ int cf_section_parse_pass2(void *base, CONF_SECTION *cs, CONF_PARSER const varia
 		/*
 		 *	Figure out which data we need to fix.
 		 */
-		data = variables[i].data; /* prefer this. */
-		if (!data && base) data = ((char *)base) + variables[i].offset;
+		data = rule->data; /* prefer this. */
+		if (!data && base) data = ((char *)base) + rule->offset;
 		if (!data) continue;
 
 		/*
@@ -1118,7 +1092,7 @@ int cf_section_parse_pass2(void *base, CONF_SECTION *cs, CONF_PARSER const varia
 			 *	Ignore %{... in shared secrets.
 			 *	They're never dynamically expanded.
 			 */
-			if ((variables[i].type & FR_TYPE_SECRET) != 0) continue;
+			if ((rule->type & FR_TYPE_SECRET) != 0) continue;
 
 			if (strstr(cp->value, "%{") != NULL) {
 				cf_log_err(&cp->item, "Found dynamic expansion in string which "
@@ -1239,14 +1213,65 @@ int cf_section_parse_pass2(void *base, CONF_SECTION *cs, CONF_PARSER const varia
 			TALLOC_FREE(*out);
 			*(vp_tmpl_t **)out = vpt;
 		}
-	} /* for all variables in the configuration section */
+	}
 
 	return 0;
 }
 
+/*
+ *	Fixme? Swapout with an iterative API.
+ */
 const CONF_PARSER *cf_section_parse_table(CONF_SECTION *cs)
 {
 	if (!cs) return NULL;
 
 	return cs->variables;
+}
+
+/** Add a single rule to a #CONF_SECTION
+ *
+ * @param[in] cs	to add rules to.
+ * @param[in] rule	to add.
+ * @return
+ *	- 0 on success.
+ *	- -1 if the rules added conflict.
+ */
+int _cf_section_rule_push(CONF_SECTION *cs, CONF_PARSER const *rule, char const *filename, int lineno)
+{
+	/*
+	 *	Qualifying with name prevents duplicate rules being added
+	 *
+	 *	Fixme maybe... Can't have a section and pair with the same name.
+	 */
+	if (!_cf_data_add_static(CF_TO_ITEM(cs), rule, "CONF_PARSER", rule->name, filename, lineno)) {
+		cf_debug(cs);
+		return -1;
+	}
+
+	return 0;
+}
+
+/** Add an array of parse rules to a #CONF_SECTION
+ *
+ * @param[in] cs	to add rules to.
+ * @param[in] rules	to add.  Last element should have NULL name field.
+ * @return
+ *	- 0 on success.
+ *	- -1 on failure.
+ */
+int _cf_section_rules_push(CONF_SECTION *cs, CONF_PARSER const *rules, char const *filename, int lineno)
+{
+	CONF_PARSER const *rule_p;
+
+	for (rule_p = rules; rule_p->name; rule_p++) {
+		if (_cf_section_rule_push(cs, rule_p, filename, lineno) < 0) return -1;
+	}
+
+	/*
+	 *	Ensure we have a proper terminator, type so we catch
+	 *	missing terminators reliably
+	 */
+	rad_cond_assert(rule_p->type == conf_term.type);
+
+	return 0;
 }
