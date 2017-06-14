@@ -197,7 +197,7 @@ static int cf_pair_parse_value(TALLOC_CTX *ctx, void *out, CONF_SECTION *cs, CON
 			   (strcasecmp(cp->value, "off") == 0)) {
 			*(bool *)out = false;
 		} else {
-			cf_log_err(&(cs->item), "Invalid value \"%s\" for boolean variable %s",
+			cf_log_err(cs, "Invalid value \"%s\" for boolean variable %s",
 				   cp->value, cf_pair_attr(cp));
 			rcode = -1;
 			goto error;
@@ -217,7 +217,7 @@ static int cf_pair_parse_value(TALLOC_CTX *ctx, void *out, CONF_SECTION *cs, CON
 		 *	represent config item integers.
 		 */
 		if (v > INT32_MAX) {
-			cf_log_err(&(cs->item), "Invalid value \"%s\" for variable %s, must be between 0-%u", cp->value,
+			cf_log_err(cs, "Invalid value \"%s\" for variable %s, must be between 0-%u", cp->value,
 				   cf_pair_attr(cp), INT32_MAX);
 			rcode = -1;
 			goto error;
@@ -233,7 +233,7 @@ static int cf_pair_parse_value(TALLOC_CTX *ctx, void *out, CONF_SECTION *cs, CON
 		unsigned long v = strtoul(cp->value, 0, 0);
 
 		if (v > UINT8_MAX) {
-			cf_log_err(&(cs->item), "Invalid value \"%s\" for variable %s, must be between 0-%u", cp->value,
+			cf_log_err(cs, "Invalid value \"%s\" for variable %s, must be between 0-%u", cp->value,
 				   cf_pair_attr(cp), UINT8_MAX);
 			rcode = -1;
 			goto error;
@@ -248,7 +248,7 @@ static int cf_pair_parse_value(TALLOC_CTX *ctx, void *out, CONF_SECTION *cs, CON
 		unsigned long v = strtoul(cp->value, 0, 0);
 
 		if (v > UINT16_MAX) {
-			cf_log_err(&(cs->item), "Invalid value \"%s\" for variable %s, must be between 0-%u", cp->value,
+			cf_log_err(cs, "Invalid value \"%s\" for variable %s, must be between 0-%u", cp->value,
 				   cf_pair_attr(cp), UINT16_MAX);
 			rcode = -1;
 			goto error;
@@ -266,7 +266,7 @@ static int cf_pair_parse_value(TALLOC_CTX *ctx, void *out, CONF_SECTION *cs, CON
 	case FR_TYPE_SIZE:
 	{
 		if (fr_size_from_str((size_t *)out, cp->value) < 0) {
-			cf_log_err(&(cs->item), "Invalid value \"%s\" for variable %s: %s", cp->value,
+			cf_log_err(cs, "Invalid value \"%s\" for variable %s: %s", cp->value,
 				   cf_pair_attr(cp), fr_strerror());
 			rcode = -1;
 			goto error;
@@ -322,7 +322,7 @@ static int cf_pair_parse_value(TALLOC_CTX *ctx, void *out, CONF_SECTION *cs, CON
 		ipaddr = out;
 
 		if (fr_inet_pton4(ipaddr, cp->value, -1, true, false, true) < 0) {
-			cf_log_err(&(cp->item), "%s", fr_strerror());
+			cf_log_err(cp, "%s", fr_strerror());
 			rcode = -1;
 			goto error;
 		}
@@ -338,7 +338,7 @@ static int cf_pair_parse_value(TALLOC_CTX *ctx, void *out, CONF_SECTION *cs, CON
 		ipaddr = out;
 
 		if (fr_inet_pton6(ipaddr, cp->value, -1, true, false, true) < 0) {
-			cf_log_err(&(cp->item), "%s", fr_strerror());
+			cf_log_err(cp, "%s", fr_strerror());
 			rcode = -1;
 			goto error;
 		}
@@ -354,7 +354,7 @@ static int cf_pair_parse_value(TALLOC_CTX *ctx, void *out, CONF_SECTION *cs, CON
 		ipaddr = out;
 
 		if (fr_inet_pton(ipaddr, cp->value, -1, AF_UNSPEC, true, true) < 0) {
-			cf_log_err(&(cp->item), "%s", fr_strerror());
+			cf_log_err(cp, "%s", fr_strerror());
 			rcode = -1;
 			goto error;
 		}
@@ -370,7 +370,7 @@ static int cf_pair_parse_value(TALLOC_CTX *ctx, void *out, CONF_SECTION *cs, CON
 		struct timeval tv;
 
 		if (fr_timeval_from_str(&tv, cp->value) < 0) {
-			cf_log_err(&(cp->item), "%s", fr_strerror());
+			cf_log_err(cp, "%s", fr_strerror());
 			rcode = -1;
 			goto error;
 		}
@@ -389,7 +389,7 @@ static int cf_pair_parse_value(TALLOC_CTX *ctx, void *out, CONF_SECTION *cs, CON
 		rad_assert(type > FR_TYPE_INVALID);
 		rad_assert(type < FR_TYPE_MAX);
 
-		cf_log_err(&(cp->item), "type '%s' (%i) is not supported in the configuration files",
+		cf_log_err(cp, "type '%s' (%i) is not supported in the configuration files",
 			   fr_int2str(dict_attr_types, type, "?Unknown?"), type);
 		rcode = -1;
 		goto error;
@@ -432,7 +432,7 @@ static int cf_pair_default(CONF_PAIR **out, CONF_SECTION *cs, char const *name,
 	 */
 	expanded = cf_expand_variables("<internal>", &lineno, cs, buffer, sizeof(buffer), dflt, NULL);
 	if (!expanded) {
-		cf_log_err(&(cs->item), "Failed expanding variable %s", name);
+		cf_log_err(cs, "Failed expanding variable %s", name);
 		return -1;
 	}
 
@@ -978,7 +978,7 @@ int cf_section_parse(TALLOC_CTX *ctx, void *base, CONF_SECTION *cs)
 		case -2:	/* Deprecated CONF ITEM */
 			if (((rule + 1)->offset && ((rule + 1)->offset == rule->offset)) ||
 			    ((rule + 1)->data && ((rule + 1)->data == rule->data))) {
-				cf_log_err(&(cs->item), "Replace \"%s\" with \"%s\"", rule->name,
+				cf_log_err(cs, "Replace \"%s\" with \"%s\"", rule->name,
 					   (rule + 1)->name);
 			}
 			goto finish;
