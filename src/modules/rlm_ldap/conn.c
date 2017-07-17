@@ -113,7 +113,7 @@ void *mod_conn_create(TALLOC_CTX *ctx, void *instance, struct timeval const *tim
 	fr_ldap_conn_t			*conn;
 	fr_ldap_handle_config_t const	*handle_config = instance;	/* Not talloced */
 
-	conn = fr_ldap_conn_alloc(ctx, handle_config);
+	conn = fr_ldap_conn_alloc_async(ctx, handle_config);
 	if (!conn) return NULL;
 
 	fr_ldap_conn_timeout_set(conn, timeout);

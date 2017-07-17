@@ -399,7 +399,7 @@ fr_ldap_rcode_t	fr_ldap_result(LDAPMessage **result, LDAPControl ***ctrls,
 			       char const *dn,
 			       struct timeval const *timeout);
 
-fr_ldap_conn_t	*fr_ldap_conn_alloc(TALLOC_CTX *ctx, fr_ldap_handle_config_t const *handle_config);
+fr_ldap_conn_t	*fr_ldap_conn_alloc_async(TALLOC_CTX *ctx, fr_ldap_handle_config_t const *handle_config);
 
 int		fr_ldap_conn_timeout_set(fr_ldap_conn_t const *conn, struct timeval const *timeout);
 

@@ -942,7 +942,7 @@ static int proto_ldap_socket_open(UNUSED CONF_SECTION *cs, rad_listen_t *listen)
 	/*
 	 *	Allocate a brand-new connection
 	 */
-	inst->conn = fr_ldap_conn_alloc(inst, &inst->handle_config);
+	inst->conn = fr_ldap_conn_alloc_async(inst, &inst->handle_config);
 	if (!inst->conn) goto error;
 
 	if (inst->conn->config->start_tls) {
