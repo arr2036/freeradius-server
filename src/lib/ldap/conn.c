@@ -42,8 +42,9 @@ static int _mod_conn_free_async(fr_ldap_conn_t *conn)
  *
  * Allocates and configures both our ldap handle, and libldap's handle.
  *
- * This can be used by async code, as no attempt is made to connect to the LDAP server.
- * An attempt will be made if ldap_start_tls* or ldap_bind* are called.
+ * This can be used by async code and async code as no attempt is made to connect
+ * to the LDAP server.  An attempt will only be made if ldap_start_tls* or ldap_bind*
+ * functions are called.
  *
  * @param[in] ctx		to allocate handle in.
  * @param[in] handle_config	Connection configuration.
@@ -51,7 +52,7 @@ static int _mod_conn_free_async(fr_ldap_conn_t *conn)
  *	- A new handle on success.
  *	- NULL on error.
  */
-fr_ldap_conn_t *fr_ldap_conn_alloc_async(TALLOC_CTX *ctx, fr_ldap_handle_config_t const *handle_config)
+fr_ldap_conn_t *fr_ldap_conn_configure(TALLOC_CTX *ctx, fr_ldap_handle_config_t const *handle_config)
 {
 	fr_ldap_conn_t			*conn;
 	LDAP				*handle = NULL;
@@ -212,6 +213,70 @@ error:
 	talloc_free(conn);
 
 	return NULL;
+}
+
+/** Send an extended operation to the LDAP server, requesting a transition to TLS
+ *
+ * Behind the scenes ldap_start_tls calls:
+ *
+ *	ldap_extended_operation(ld, LDAP_EXOP_START_TLS, NULL, serverctrls, clientctrls, msgidp);
+ *
+ * After getting a response (connection becomes writable), we call ldap_install_tls.  This funcion
+ * attempts to retrieve any outstanding responses, and then installs TLS handlers.
+ *
+ */
+static int fr_ldap_conn_start_tls_async(fr_ldap_conn_t *conn)
+{
+	int		msgid = 0;
+	int		ret;
+
+	LDAPControl	*our_serverctrls[LDAP_MAX_CONTROLS];
+	LDAPControl	*our_clientctrls[LDAP_MAX_CONTROLS];
+
+	fr_ldap_control_merge(our_serverctrls, our_clientctrls,
+			      sizeof(our_serverctrls) / sizeof(*our_serverctrls),
+			      sizeof(our_clientctrls) / sizeof(*our_clientctrls),
+			      conn, NULL, NULL);
+
+	ret = ldap_start_tls(conn->handle, our_serverctrls, our_clientctrls, &msgid);
+	if (ret < 0) {
+		ERROR("ldap_start_tls failed: %s",  ldap_err2string(ldap_errno));
+		return -1;
+	}
+}
+
+static fr_connection_state_t _ldap_conn_init(int *fd_out, void *uctx)
+{
+
+}
+
+static fr_connection_state_t _ldap_conn_open(int fd, fr_event_list_t *el, void *uctx)
+{
+
+}
+
+static  fr_connection_state_t _ldap_conn_failed(int fd, fr_connection_state_t state, void *uctx)
+{
+
+}
+
+static void _ldap_conn_close(int fd, void *uctx)
+{
+
+}
+
+fr_connection_t *fr_ldap_conn_alloc(TALLOC_CTX *ctx, fr_event_list_t *el,
+				    fr_ldap_handle_config_t const *handle_config, char *log_prefix)
+{
+	fr_connection_t *conn;
+
+	conn = fr_connection_alloc(ctx, el, handle_config->net_timeout, handle_config->reconnect_delay,
+				   _ldap_conn_init, _ldap_conn_open, _ldap_conn_fail, log_prefix, handle_config);
+	if (!conn) return NULL;
+
+	fr_connection_failed_func(conn, _ldap_conn_failed);
+
+	return conn;
 }
 
 int fr_ldap_conn_timeout_set(fr_ldap_conn_t const *conn, struct timeval const *timeout)

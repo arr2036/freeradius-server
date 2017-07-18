@@ -247,13 +247,18 @@ typedef struct {
 	uint32_t	srv_timelimit;			//!< How long the server should spent on a single request
 							//!< (also bounded by value on the server).
 
+	struct timeval	res_timeout;			//!< How long we wait for results.
+
+	/*
+	 *	I/O timelimits.
+	 */
 	struct timeval	net_timeout;			//!< How long we wait in blocking network calls.
 							//!< We set this in the LDAP API, even though with
 							//!< async calls, we control this using our event loop.
 							//!< This is just in case there are blocking calls which
 							//!< happen internally which we can't work around.
 
-	struct timeval	res_timeout;			//!< How long we wait for results.
+	struct timeval	reconnection_delay;		//!< How long to wait before attempting to reconnect.
 } fr_ldap_handle_config_t;
 
 /** Tracks the state of a libldap connection handle
@@ -310,7 +315,7 @@ typedef enum {
 
 	LDAP_PROC_ERROR	= -1,				//!< Unrecoverable library/server error.
 
-	LDAP_PROC_BAD_CONN	= -2,			//!< Transitory error, caller should retry the operation
+	LDAP_PROC_BAD_CONN = -2,			//!< Transitory error, caller should retry the operation
 							//!< with a new connection.
 
 	LDAP_PROC_NOT_PERMITTED = -3,			//!< Operation was not permitted, either current user was
@@ -399,7 +404,7 @@ fr_ldap_rcode_t	fr_ldap_result(LDAPMessage **result, LDAPControl ***ctrls,
 			       char const *dn,
 			       struct timeval const *timeout);
 
-fr_ldap_conn_t	*fr_ldap_conn_alloc_async(TALLOC_CTX *ctx, fr_ldap_handle_config_t const *handle_config);
+fr_ldap_conn_t	*fr_ldap_conn_configure(TALLOC_CTX *ctx, fr_ldap_handle_config_t const *handle_config);
 
 int		fr_ldap_conn_timeout_set(fr_ldap_conn_t const *conn, struct timeval const *timeout);
 
