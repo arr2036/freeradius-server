@@ -56,20 +56,20 @@ static CONF_PARSER tls_config[] = {
 	/*
 	 *	Deprecated attributes
 	 */
-	{ FR_CONF_OFFSET("ca_file", FR_TYPE_FILE_INPUT, fr_ldap_handle_config_t, tls_ca_file) },
+	{ FR_CONF_OFFSET("ca_file", FR_TYPE_FILE_INPUT, fr_ldap_config_t, tls_ca_file) },
 
-	{ FR_CONF_OFFSET("ca_path", FR_TYPE_FILE_INPUT, fr_ldap_handle_config_t, tls_ca_path) },
+	{ FR_CONF_OFFSET("ca_path", FR_TYPE_FILE_INPUT, fr_ldap_config_t, tls_ca_path) },
 
-	{ FR_CONF_OFFSET("certificate_file", FR_TYPE_FILE_INPUT, fr_ldap_handle_config_t, tls_certificate_file) },
+	{ FR_CONF_OFFSET("certificate_file", FR_TYPE_FILE_INPUT, fr_ldap_config_t, tls_certificate_file) },
 
-	{ FR_CONF_OFFSET("private_key_file", FR_TYPE_FILE_INPUT, fr_ldap_handle_config_t, tls_private_key_file) },
+	{ FR_CONF_OFFSET("private_key_file", FR_TYPE_FILE_INPUT, fr_ldap_config_t, tls_private_key_file) },
 
 	/*
 	 *	LDAP Specific TLS attributes
 	 */
-	{ FR_CONF_OFFSET("start_tls", FR_TYPE_BOOL, fr_ldap_handle_config_t, start_tls), .dflt = "no" },
+	{ FR_CONF_OFFSET("start_tls", FR_TYPE_BOOL, fr_ldap_config_t, start_tls), .dflt = "no" },
 
-	{ FR_CONF_OFFSET("require_cert", FR_TYPE_STRING, fr_ldap_handle_config_t, tls_require_cert_str) },
+	{ FR_CONF_OFFSET("require_cert", FR_TYPE_STRING, fr_ldap_config_t, tls_require_cert_str) },
 
 	CONF_PARSER_TERMINATOR
 };

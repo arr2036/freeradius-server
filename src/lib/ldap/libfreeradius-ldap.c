@@ -39,7 +39,7 @@ static int instance_count = 0;
 /** Used to set the global log prefix for functions which don't operate on connections
  *
  */
-static fr_ldap_handle_config_t ldap_global_handle_config = {
+static fr_ldap_config_t ldap_global_handle_config = {
 	.name = "global"
 };
 
@@ -94,7 +94,7 @@ void fr_ldap_timeout_debug(REQUEST *request, fr_ldap_conn_t const *conn,
 {
 	struct timeval 			*net = NULL, *client = NULL;
 	int				server = 0;
-	fr_ldap_handle_config_t const	*handle_config = conn->config;
+	fr_ldap_config_t const	*handle_config = conn->config;
 
 
 #ifdef LDAP_OPT_NETWORK_TIMEOUT
@@ -469,7 +469,7 @@ fr_ldap_rcode_t fr_ldap_bind(REQUEST *request,
 			     LDAPControl **serverctrls, LDAPControl **clientctrls)
 {
 	fr_ldap_rcode_t			status = LDAP_PROC_ERROR;
-	fr_ldap_handle_config_t const	*handle_config = (*pconn)->config;
+	fr_ldap_config_t const	*handle_config = (*pconn)->config;
 
 	int				msgid = -1;
 
@@ -564,7 +564,7 @@ fr_ldap_rcode_t fr_ldap_search(LDAPMessage **result, REQUEST *request,
 	fr_ldap_rcode_t			status = LDAP_PROC_ERROR;
 	LDAPMessage			*our_result = NULL;
 
-	fr_ldap_handle_config_t const	*handle_config = (*pconn)->config;
+	fr_ldap_config_t const	*handle_config = (*pconn)->config;
 
 	int				msgid;		// Message id returned by
 							// ldap_search_ext.
@@ -691,7 +691,7 @@ fr_ldap_rcode_t fr_ldap_search_async(int *msgid, REQUEST *request,
 {
 	fr_ldap_rcode_t			status = LDAP_PROC_ERROR;
 
-	fr_ldap_handle_config_t const	*handle_config = (*pconn)->config;
+	fr_ldap_config_t const	*handle_config = (*pconn)->config;
 
 	struct timeval			tv;		// Holds timeout values.
 
@@ -844,7 +844,7 @@ static int fr_ldap_rebind(LDAP *handle, LDAP_CONST char *url,
 {
 	fr_ldap_rcode_t			status;
 	fr_ldap_conn_t			*conn = talloc_get_type_abort(ctx, fr_ldap_conn_t);
-	fr_ldap_handle_config_t const	*handle_config = conn->config;
+	fr_ldap_config_t const	*handle_config = conn->config;
 
 	char const			*admin_identity = NULL;
 	char const			*admin_password = NULL;
@@ -952,7 +952,7 @@ static int fr_ldap_rebind(LDAP *handle, LDAP_CONST char *url,
 int fr_ldap_global_config(int debug_level, char const *tls_random_file)
 {
 	static bool		done_config;
-	fr_ldap_handle_config_t	*handle_config = &ldap_global_handle_config;
+	fr_ldap_config_t	*handle_config = &ldap_global_handle_config;
 
 	if (done_config) return 0;
 
@@ -998,7 +998,7 @@ int fr_ldap_global_init(void)
 {
 	int			ldap_errno;
 	static LDAPAPIInfo	info = { .ldapai_info_version = LDAP_API_INFO_VERSION };	/* static to quiet valgrind about this being uninitialised */
-	fr_ldap_handle_config_t	*handle_config = &ldap_global_handle_config;
+	fr_ldap_config_t	*handle_config = &ldap_global_handle_config;
 
 	if (instance_count > 0) {
 		instance_count++;

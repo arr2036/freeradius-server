@@ -35,7 +35,7 @@
  *
  */
 typedef struct {
-	fr_ldap_handle_config_t		handle_config;		//!< Connection configuration instance.
+	fr_ldap_config_t		handle_config;		//!< Connection configuration instance.
 
 	sync_config_t			**sync_config;		//!< DNs and filters to monitor.
 
@@ -123,22 +123,22 @@ static CONF_PARSER ldap_sync_search_config[] = {
 
 static CONF_PARSER option_config[] = {
 #ifdef LDAP_OPT_X_KEEPALIVE_IDLE
-	{ FR_CONF_OFFSET("idle", FR_TYPE_UINT32, fr_ldap_handle_config_t, keepalive_idle), .dflt = "60" },
+	{ FR_CONF_OFFSET("idle", FR_TYPE_UINT32, fr_ldap_config_t, keepalive_idle), .dflt = "60" },
 #endif
 #ifdef LDAP_OPT_X_KEEPALIVE_PROBES
-	{ FR_CONF_OFFSET("probes", FR_TYPE_UINT32, fr_ldap_handle_config_t, keepalive_probes), .dflt = "3" },
+	{ FR_CONF_OFFSET("probes", FR_TYPE_UINT32, fr_ldap_config_t, keepalive_probes), .dflt = "3" },
 #endif
 #ifdef LDAP_OPT_X_KEEPALIVE_INTERVAL
-	{ FR_CONF_OFFSET("interval", FR_TYPE_UINT32, fr_ldap_handle_config_t, keepalive_interval), .dflt = "30" },
+	{ FR_CONF_OFFSET("interval", FR_TYPE_UINT32, fr_ldap_config_t, keepalive_interval), .dflt = "30" },
 #endif
-	{ FR_CONF_OFFSET("dereference", FR_TYPE_STRING, fr_ldap_handle_config_t, dereference_str) },
+	{ FR_CONF_OFFSET("dereference", FR_TYPE_STRING, fr_ldap_config_t, dereference_str) },
 	/* allow server unlimited time for search (server-side limit) */
-	{ FR_CONF_OFFSET("srv_timelimit", FR_TYPE_UINT32, fr_ldap_handle_config_t, srv_timelimit), .dflt = "20" },
+	{ FR_CONF_OFFSET("srv_timelimit", FR_TYPE_UINT32, fr_ldap_config_t, srv_timelimit), .dflt = "20" },
 	/* timeout for search results */
-	{ FR_CONF_OFFSET("res_timeout", FR_TYPE_TIMEVAL, fr_ldap_handle_config_t, res_timeout), .dflt = "20" },
+	{ FR_CONF_OFFSET("res_timeout", FR_TYPE_TIMEVAL, fr_ldap_config_t, res_timeout), .dflt = "20" },
 #ifdef LDAP_OPT_NETWORK_TIMEOUT
 	/* timeout on network activity */
-	{ FR_CONF_DEPRECATED("net_timeout", FR_TYPE_UINT32, fr_ldap_handle_config_t, net_timeout), .dflt = "10" },
+	{ FR_CONF_DEPRECATED("net_timeout", FR_TYPE_UINT32, fr_ldap_config_t, net_timeout), .dflt = "10" },
 #endif
 
 	CONF_PARSER_TERMINATOR
@@ -155,12 +155,12 @@ static const CONF_PARSER global_config[] = {
  *	TLS Configuration
  */
 static CONF_PARSER tls_config[] = {
-	{ FR_CONF_OFFSET("ca_file", FR_TYPE_FILE_INPUT, fr_ldap_handle_config_t, tls_ca_file) },
-	{ FR_CONF_OFFSET("ca_path", FR_TYPE_FILE_INPUT, fr_ldap_handle_config_t, tls_ca_path) },
-	{ FR_CONF_OFFSET("certificate_file", FR_TYPE_FILE_INPUT, fr_ldap_handle_config_t, tls_certificate_file) },
-	{ FR_CONF_OFFSET("private_key_file", FR_TYPE_FILE_INPUT, fr_ldap_handle_config_t, tls_private_key_file) },
-	{ FR_CONF_OFFSET("start_tls", FR_TYPE_BOOL, fr_ldap_handle_config_t, start_tls), .dflt = "no" },
-	{ FR_CONF_OFFSET("require_cert", FR_TYPE_STRING, fr_ldap_handle_config_t, tls_require_cert_str) },
+	{ FR_CONF_OFFSET("ca_file", FR_TYPE_FILE_INPUT, fr_ldap_config_t, tls_ca_file) },
+	{ FR_CONF_OFFSET("ca_path", FR_TYPE_FILE_INPUT, fr_ldap_config_t, tls_ca_path) },
+	{ FR_CONF_OFFSET("certificate_file", FR_TYPE_FILE_INPUT, fr_ldap_config_t, tls_certificate_file) },
+	{ FR_CONF_OFFSET("private_key_file", FR_TYPE_FILE_INPUT, fr_ldap_config_t, tls_private_key_file) },
+	{ FR_CONF_OFFSET("start_tls", FR_TYPE_BOOL, fr_ldap_config_t, start_tls), .dflt = "no" },
+	{ FR_CONF_OFFSET("require_cert", FR_TYPE_STRING, fr_ldap_config_t, tls_require_cert_str) },
 
 	CONF_PARSER_TERMINATOR
 };

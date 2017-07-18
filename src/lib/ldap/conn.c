@@ -10,7 +10,7 @@
  */
 static int _mod_conn_free_async(fr_ldap_conn_t *conn)
 {
-	fr_ldap_handle_config_t const	*handle_config = conn->config;
+	fr_ldap_config_t const	*config = conn->config;
 
 	rad_assert(conn->handle);
 
@@ -47,28 +47,28 @@ static int _mod_conn_free_async(fr_ldap_conn_t *conn)
  * functions are called.
  *
  * @param[in] ctx		to allocate handle in.
- * @param[in] handle_config	Connection configuration.
+ * @param[in] config	Connection configuration.
  * @return
  *	- A new handle on success.
  *	- NULL on error.
  */
-fr_ldap_conn_t *fr_ldap_conn_configure(TALLOC_CTX *ctx, fr_ldap_handle_config_t const *handle_config)
+fr_ldap_conn_t *fr_ldap_conn_configure(TALLOC_CTX *ctx, fr_ldap_config_t const *config)
 {
 	fr_ldap_conn_t			*conn;
 	LDAP				*handle = NULL;
 
 	int				ldap_errno, ldap_version;
 
-	rad_assert(handle_config->server);
+	rad_assert(config->server);
 
 #ifdef HAVE_LDAP_INITIALIZE
-	ldap_errno = ldap_initialize(&handle, handle_config->server);
+	ldap_errno = ldap_initialize(&handle, config->server);
 	if (ldap_errno != LDAP_SUCCESS) {
 		ERROR("ldap_initialize failed: %s", ldap_err2string(ldap_errno));
 		return NULL;
 	}
 #else
-	handle = ldap_init(handle_config->server, handle_config->port);
+	handle = ldap_init(config->server, config->port);
 	if (!handle) {
 		ERROR("ldap_init failed");
 		return NULL;
@@ -83,7 +83,7 @@ fr_ldap_conn_t *fr_ldap_conn_configure(TALLOC_CTX *ctx, fr_ldap_handle_config_t 
 	conn = talloc_zero(ctx, fr_ldap_conn_t);
 	if (!conn) return NULL;
 
-	conn->config = handle_config;
+	conn->config = config;
 	conn->handle = handle;
 	conn->rebound = false;
 	conn->referred = false;
@@ -109,18 +109,18 @@ fr_ldap_conn_t *fr_ldap_conn_configure(TALLOC_CTX *ctx, fr_ldap_handle_config_t 
 	/*
 	 *	Leave "dereference" unset to use the OpenLDAP default.
 	 */
-	if (handle_config->dereference_str) {
-		do_ldap_option(LDAP_OPT_DEREF, "dereference", &(handle_config->dereference));
+	if (config->dereference_str) {
+		do_ldap_option(LDAP_OPT_DEREF, "dereference", &(config->dereference));
 	}
 
 	/*
 	 *	Leave "chase_referrals" unset to use the OpenLDAP default.
 	 */
-	if (!handle_config->chase_referrals_unset) {
-		if (handle_config->chase_referrals) {
+	if (!config->chase_referrals_unset) {
+		if (config->chase_referrals) {
 			do_ldap_option(LDAP_OPT_REFERRALS, "chase_referrals", LDAP_OPT_ON);
 
-			if (handle_config->rebind == true) {
+			if (config->rebind == true) {
 #if LDAP_SET_REBIND_PROC_ARGS == 3
 				ldap_set_rebind_proc(conn->handle, fr_ldap_rebind, conn);
 #endif
@@ -139,7 +139,7 @@ fr_ldap_conn_t *fr_ldap_conn_configure(TALLOC_CTX *ctx, fr_ldap_handle_config_t 
 	 *	libldap requires tv_sec to be -1 to mean that.
 	 */
 	{
-		struct timeval ldap_timeout = handle_config->net_timeout;
+		struct timeval ldap_timeout = config->net_timeout;
 
 		if ((ldap_timeout.tv_usec == 0) && (ldap_timeout.tv_sec == 0)) ldap_timeout.tv_sec = -1;
 
@@ -147,41 +147,41 @@ fr_ldap_conn_t *fr_ldap_conn_configure(TALLOC_CTX *ctx, fr_ldap_handle_config_t 
 	}
 #endif
 
-	do_ldap_option(LDAP_OPT_TIMELIMIT, "srv_timelimit", &(handle_config->srv_timelimit));
+	do_ldap_option(LDAP_OPT_TIMELIMIT, "srv_timelimit", &(config->srv_timelimit));
 
 	ldap_version = LDAP_VERSION3;
 	do_ldap_option(LDAP_OPT_PROTOCOL_VERSION, "ldap_version", &ldap_version);
 
 #ifdef LDAP_OPT_X_KEEPALIVE_IDLE
-	do_ldap_option(LDAP_OPT_X_KEEPALIVE_IDLE, "keepalive_idle", &(handle_config->keepalive_idle));
+	do_ldap_option(LDAP_OPT_X_KEEPALIVE_IDLE, "keepalive_idle", &(config->keepalive_idle));
 #endif
 
 #ifdef LDAP_OPT_X_KEEPALIVE_PROBES
-	do_ldap_option(LDAP_OPT_X_KEEPALIVE_PROBES, "keepalive_probes", &(handle_config->keepalive_probes));
+	do_ldap_option(LDAP_OPT_X_KEEPALIVE_PROBES, "keepalive_probes", &(config->keepalive_probes));
 #endif
 
 #ifdef LDAP_OPT_X_KEEPALIVE_INTERVAL
-	do_ldap_option(LDAP_OPT_X_KEEPALIVE_INTERVAL, "keepalive_interval", &(handle_config->keepalive_interval));
+	do_ldap_option(LDAP_OPT_X_KEEPALIVE_INTERVAL, "keepalive_interval", &(config->keepalive_interval));
 #endif
 
 #ifdef HAVE_LDAP_START_TLS_S
 	/*
 	 *	Set all of the TLS options
 	 */
-	if (handle_config->tls_mode) do_ldap_option(LDAP_OPT_X_TLS, "tls_mode", &(handle_config->tls_mode));
+	if (config->tls_mode) do_ldap_option(LDAP_OPT_X_TLS, "tls_mode", &(config->tls_mode));
 
-	maybe_ldap_option(LDAP_OPT_X_TLS_CACERTFILE, "ca_file", handle_config->tls_ca_file);
-	maybe_ldap_option(LDAP_OPT_X_TLS_CACERTDIR, "ca_path", handle_config->tls_ca_path);
+	maybe_ldap_option(LDAP_OPT_X_TLS_CACERTFILE, "ca_file", config->tls_ca_file);
+	maybe_ldap_option(LDAP_OPT_X_TLS_CACERTDIR, "ca_path", config->tls_ca_path);
 
 	/*
 	 *	Set certificate options
 	 */
-	maybe_ldap_option(LDAP_OPT_X_TLS_CERTFILE, "certificate_file", handle_config->tls_certificate_file);
-	maybe_ldap_option(LDAP_OPT_X_TLS_KEYFILE, "private_key_file", handle_config->tls_private_key_file);
+	maybe_ldap_option(LDAP_OPT_X_TLS_CERTFILE, "certificate_file", config->tls_certificate_file);
+	maybe_ldap_option(LDAP_OPT_X_TLS_KEYFILE, "private_key_file", config->tls_private_key_file);
 
 #  ifdef LDAP_OPT_X_TLS_NEVER
-	if (handle_config->tls_require_cert_str) {
-		do_ldap_option(LDAP_OPT_X_TLS_REQUIRE_CERT, "require_cert", &handle_config->tls_require_cert);
+	if (config->tls_require_cert_str) {
+		do_ldap_option(LDAP_OPT_X_TLS_REQUIRE_CERT, "require_cert", &config->tls_require_cert);
 	}
 #  endif
 
@@ -197,15 +197,15 @@ fr_ldap_conn_t *fr_ldap_conn_configure(TALLOC_CTX *ctx, fr_ldap_handle_config_t 
 	}
 #  endif
 
-	if (handle_config->start_tls) {
-		if (handle_config->port == 636) {
+	if (config->start_tls) {
+		if (config->port == 636) {
 			WARN("Told to Start TLS on LDAPS port this will probably fail, please correct the "
 			     "configuration");
 		}
 	}
 #endif /* HAVE_LDAP_START_TLS_S */
 
-	conn->config = handle_config;
+	conn->config = config;
 
 	return conn;
 
@@ -247,42 +247,108 @@ static int fr_ldap_conn_start_tls_async(fr_ldap_conn_t *conn)
 
 static fr_connection_state_t _ldap_conn_init(int *fd_out, void *uctx)
 {
+	fr_ldap_conn_ctx_t	*ldap_conn_ctx = talloc_get_type_abort(uctx, fr_ldap_conn_ctx_t);
+
+	/*
+	 *	Allocate our connection abstraction,
+	 *	and the LDAP connection handle.
+	 */
+	ldap_conn_ctx->conn = fr_ldap_conn_configure(ldap_conn_ctx, ldap_conn_ctx->config);
+	if (!ldap_conn) return FR_CONNECTION_STATE_FAILED;
+
+	return FR_CONNECTION_STATE_CONNECTING;
+}
+
+/** Event handler for the response to the StartTLS extended operation
+ *
+ * @param[in] el	the event occurred in.
+ * @param[in] fd	the event occurred on.
+ * @param[in] flags	from kevent.
+ * @param[in] uctx	Connection config and handle.
+ */
+static void _ldap_conn_start_tls_async_read(fr_event_list_t *el, int fd, int flags, void *uctx)
+{
+
+}
+
+/** Connection error
+ *
+ * @param[in] el	the event occurred in.
+ * @param[in] fd	the event occurred on.
+ * @param[in] flags	from kevent.
+ * @param[in] fd_errno	The error that ocurred.
+ * @param[in] uctx	Connection config and handle.
+static void _ldap_conn_error(fr_event_list_t *el, int fd, int flags, int fd_errno, void *uctx)
+{
 
 }
 
 static fr_connection_state_t _ldap_conn_open(int fd, fr_event_list_t *el, void *uctx)
 {
+	fr_ldap_conn_ctx_t	*ldap_conn_ctx = talloc_get_type_abort(uctx, fr_ldap_conn_ctx_t);
 
+	if (ldap_conn_ctx->config->start_tls) {
+		/*
+		 *	Send an extended request to try and start TLS
+		 *	then install a special I/O handler to process
+		 *	the response.
+		 */
+		if (fr_ldap_conn_start_tls_async(ldap_conn_ctx->conn) < 0) return FR_CONNECTION_STATE_FAILED;
+
+		if (fr_event_fd_insert(ldap_conn_ctx->conn, el, fd,
+				       _ldap_conn_start_tls_async_read,
+				       NULL,
+					   fr_event_fd_error_handler_t error,
+					   void *uctx);
+	}
+
+
+
+	return FR_CONNECTION_STATE_CONNECTED;
 }
 
-static  fr_connection_state_t _ldap_conn_failed(int fd, fr_connection_state_t state, void *uctx)
-{
-
-}
-
+/** Unbind from the LDAP directory and free any memory used by the connection
+ *
+ * @param[in] fd	libldap provided us with for I/O purposes.
+ * @param[in] uctx	Connection config and handle.
+ */
 static void _ldap_conn_close(int fd, void *uctx)
 {
+	fr_ldap_conn_ctx_t	*ldap_conn_ctx = talloc_get_type_abort(uctx, fr_ldap_conn_ctx_t);
 
+	TALLOC_FREE(ldap_conn_ctx->conn);	/* Yay for talloc destructors */
 }
 
+/** Create a self-re-establishing connection to an LDAP server
+ *
+ * @param[in] ctx	to allocate any memory in, and to bind the lifetime of the connection to.
+ * @param[in] el	to insert I/O and timer callbacks into.
+ * @param[in] config
+ */
 fr_connection_t *fr_ldap_conn_alloc(TALLOC_CTX *ctx, fr_event_list_t *el,
-				    fr_ldap_handle_config_t const *handle_config, char *log_prefix)
+				    fr_ldap_config_t const *config, char *log_prefix)
 {
-	fr_connection_t *conn;
+	fr_connection_t		*conn;
+	fr_ldap_conn_ctx_t	*ldap_conn_ctx;
 
-	conn = fr_connection_alloc(ctx, el, handle_config->net_timeout, handle_config->reconnect_delay,
-				   _ldap_conn_init, _ldap_conn_open, _ldap_conn_fail, log_prefix, handle_config);
-	if (!conn) return NULL;
+	MEM(ldap_conn_ctx = talloc(ctx, ldap_conn_ctx_t));
+	ldap_conn_ctx->config = config;
 
-	fr_connection_failed_func(conn, _ldap_conn_failed);
+	conn = fr_connection_alloc(ldap_conn_ctx, el,
+				   config->net_timeout, config->reconnect_delay,
+				   _ldap_conn_init,
+				   _ldap_conn_open,
+				   _ldap_conn_fail,
+				   log_prefix, ldap_conn_ctx);
+	if (!conn_state) return NULL;
 
-	return conn;
+	return conn_state;
 }
 
 int fr_ldap_conn_timeout_set(fr_ldap_conn_t const *conn, struct timeval const *timeout)
 {
 	int				ldap_errno;
-	fr_ldap_handle_config_t const	*handle_config = conn->config;
+	fr_ldap_config_t const	*config = conn->config;
 
 #ifdef LDAP_OPT_NETWORK_TIMEOUT
 	/*
@@ -310,7 +376,7 @@ error:
 int fr_ldap_conn_timeout_reset(fr_ldap_conn_t const *conn)
 {
 	int				ldap_errno;
-	fr_ldap_handle_config_t const	*handle_config = conn->config;
+	fr_ldap_config_t const	*config = conn->config;
 
 #ifdef LDAP_OPT_NETWORK_TIMEOUT
 	/*
@@ -321,7 +387,7 @@ int fr_ldap_conn_timeout_reset(fr_ldap_conn_t const *conn)
 	 *	libldap requires tv_sec to be -1 to mean that.
 	 */
 	{
-		struct timeval ldap_timeout = handle_config->net_timeout;
+		struct timeval ldap_timeout = config->net_timeout;
 
 		if ((ldap_timeout.tv_usec == 0) && (ldap_timeout.tv_sec == 0)) ldap_timeout.tv_sec = -1;
 
