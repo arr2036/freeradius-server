@@ -193,14 +193,13 @@ fr_dict_enum_autoload_t rlm_redis_ippool_dict_enum[] = {
  */
 static char lua_alloc_cmd[] =
 	"local ip" EOL											/* 1 */
-	"local exists" EOL										/* 2 */
+	"local expires_in" EOL										/* 2 */
 
 	"local pool_key" EOL										/* 3 */
 	"local address_key" EOL										/* 4 */
 	"local owner_key" EOL										/* 5 */
 
-	"pool_key = '{' .. KEYS[1] .. '}:"IPPOOL_POOL_KEY"'" EOL					/* 6 */
-	"owner_key = '{' .. KEYS[1] .. '}:"IPPOOL_OWNER_KEY":' .. ARGV[3]" EOL			/* 7 */
+	"owner_key = '{' .. KEYS[1] .. '}:"IPPOOL_OWNER_KEY":' .. ARGV[3]" EOL				/* 6 */
 
 	/*
 	 *	Check to see if the client already has a lease,
@@ -209,47 +208,49 @@ static char lua_alloc_cmd[] =
 	 *	The additional sanity checks are to allow for the record
 	 *	of device/ip binding to persist for longer than the lease.
 	 */
-	"exists = redis.call('GET', owner_key);" EOL							/* 8 */
-	"if exists then" EOL										/* 9 */
-	"  local expires_in = tonumber(redis.call('ZSCORE', pool_key, exists) - ARGV[1])" EOL		/* 10 */
-	"  if expires_in > 0 then" EOL									/* 11 */
-	"    ip = redis.call('HMGET', '{' .. KEYS[1] .. '}:"IPPOOL_ADDRESS_KEY":' .. exists, 'device', 'range', 'counter')" EOL	/* 12 */
-	"    if ip and (ip[1] == ARGV[3]) then" EOL							/* 13 */
-//	"      if expires_in < ARGV[2] then" EOL							/* 14 */
-//	"        redis.call('ZADD', pool_key, 'XX', ARGV[1] + ARGV[2], ip[1])" EOL			/* 15 */
-//	"        expires_in = ARGV[2]" EOL								/* 16 */
-//	"      end" EOL											/* 17 */
-	"      return {" STRINGIFY(_IPPOOL_RCODE_SUCCESS) ", exists, ip[2], expires_in, ip[3] }" EOL	/* 18 */
-	"    end" EOL											/* 19 */
-	"  end" EOL											/* 20 */
-	"end" EOL											/* 21 */
+	"expires_in = redis.call('TTL', owner_key);" EOL						/* 7 */
+	"if expires_in ~= -2 then" EOL									/* 8 */
+	"  if expires in == -1 then" EOL								/* 9 */
+	"    expires_in = " STRINGIFY(IPPOOL_INFINITE_LEASE) EOL					/* 10 */
+	"  end" EOL											/* 11 */
+	"  ip = redis.call('HMGET', '{' .. KEYS[1] .. '}:"IPPOOL_ADDRESS_KEY":' .. redis.call('GET', owner_key), 'device', 'range', 'counter')" EOL	/* 14 */
+	"  if ip and (ip[1] == ARGV[3]) then" EOL							/* 12 */
+//	"    if expires_in < ARGV[2] then" EOL								/* 13 */
+//	"      redis.call('ZADD', pool_key, 'XX', ARGV[1] + ARGV[2], ip[1])" EOL			/* 14 */
+//	"      expires_in = ARGV[2]" EOL								/* 15 */
+//	"    end" EOL											/* 16 */
+	"    return {" STRINGIFY(_IPPOOL_RCODE_SUCCESS) ", exists, ip[2], expires_in, ip[3] }" EOL	/* 17 */										/* 19 */
+	"  end" EOL											/* 18 */
+	"end" EOL											/* 19 */
+
+	"pool_key = '{' .. KEYS[1] .. '}:"IPPOOL_POOL_KEY"'" EOL					/* 20 */
 
 	/*
 	 *	Else, get the IP address which expired the longest time ago.
 	 */
-	"ip = redis.call('ZREVRANGE', pool_key, -1, -1, 'WITHSCORES')" EOL				/* 22 */
-	"if not ip or not ip[1] then" EOL								/* 23 */
-	"  return {" STRINGIFY(_IPPOOL_RCODE_POOL_EMPTY) "}" EOL					/* 24 */
-	"end" EOL											/* 25 */
-	"if ip[2] >= ARGV[1] then" EOL									/* 26 */
-	"  return {" STRINGIFY(_IPPOOL_RCODE_POOL_EMPTY) "}" EOL					/* 27 */
-	"end" EOL											/* 28 */
-	"redis.call('ZADD', pool_key, 'XX', ARGV[1] + ARGV[2], ip[1])" EOL				/* 29 */
+	"ip = redis.call('ZREVRANGE', pool_key, -1, -1, 'WITHSCORES')" EOL				/* 21 */
+	"if not ip or not ip[1] then" EOL								/* 22 */
+	"  return {" STRINGIFY(_IPPOOL_RCODE_POOL_EMPTY) "}" EOL					/* 23 */
+	"end" EOL											/* 24 */
+	"if ip[2] >= ARGV[1] then" EOL									/* 25 */
+	"  return {" STRINGIFY(_IPPOOL_RCODE_POOL_EMPTY) "}" EOL					/* 26 */
+	"end" EOL											/* 27 */
+	"redis.call('ZADD', pool_key, 'XX', ARGV[1] + ARGV[2], ip[1])" EOL				/* 28 */
 
 	/*
 	 *	Set the device/gateway keys
 	 */
-	"address_key = '{' .. KEYS[1] .. '}:"IPPOOL_ADDRESS_KEY":' .. ip[1]" EOL			/* 30 */
-	"redis.call('HMSET', address_key, 'device', ARGV[3], 'gateway', ARGV[4])" EOL			/* 31 */
-	"redis.call('SET', owner_key, ip[1])" EOL							/* 32 */
-	"redis.call('EXPIRE', owner_key, ARGV[2])" EOL							/* 33 */
-	"return { " EOL											/* 34 */
-	"  " STRINGIFY(_IPPOOL_RCODE_SUCCESS) "," EOL							/* 35 */
-	"  ip[1], " EOL											/* 36 */
-	"  redis.call('HGET', address_key, 'range'), " EOL						/* 37 */
-	"  tonumber(ARGV[2]), " EOL									/* 38 */
-	"  redis.call('HINCRBY', address_key, 'counter', 1)" EOL					/* 39 */
-	"}" EOL;											/* 40 */
+	"address_key = '{' .. KEYS[1] .. '}:"IPPOOL_ADDRESS_KEY":' .. ip[1]" EOL			/* 29 */
+	"redis.call('HMSET', address_key, 'device', ARGV[3], 'gateway', ARGV[4])" EOL			/* 30 */
+	"redis.call('SET', owner_key, ip[1])" EOL							/* 31 */
+	"redis.call('EXPIRE', owner_key, ARGV[2])" EOL							/* 32 */
+	"return { " EOL											/* 33 */
+	"  " STRINGIFY(_IPPOOL_RCODE_SUCCESS) "," EOL							/* 34 */
+	"  ip[1], " EOL											/* 35 */
+	"  redis.call('HGET', address_key, 'range'), " EOL						/* 36 */
+	"  tonumber(ARGV[2]), " EOL									/* 37 */
+	"  redis.call('HINCRBY', address_key, 'counter', 1)" EOL					/* 38 */
+	"}" EOL;											/* 39 */
 static char lua_alloc_digest[(SHA1_DIGEST_LENGTH * 2) + 1];
 
 /** Lua script for updating leases
@@ -292,30 +293,35 @@ static char lua_update_cmd[] =
 	"end" EOL									/* 13 */
 
 	/*
-	 *	Update the expiry time
-	 */
-	"pool_key = '{' .. KEYS[1] .. '}:"IPPOOL_POOL_KEY"'" EOL			/* 14 */
-	"redis.call('ZADD', pool_key, 'XX', ARGV[1] + ARGV[2], ARGV[3])" EOL		/* 15 */
-
-	/*
 	 *	The device key should usually exist, but
 	 *	theoretically, if we were right on the cusp
 	 *	of a lease being expired, it may have been
 	 *	removed.
 	 */
-	"owner_key = '{' .. KEYS[1] .. '}:"IPPOOL_OWNER_KEY":' .. ARGV[4]" EOL	/* 16 */
-	"if redis.call('EXPIRE', owner_key, ARGV[2]) == 0 then" EOL			/* 17 */
-	"  redis.call('SET', owner_key, ARGV[3])" EOL					/* 18 */
-	"  redis.call('EXPIRE', owner_key, ARGV[2])" EOL				/* 19 */
-	"end" EOL									/* 20 */
+	"owner_key = '{' .. KEYS[1] .. '}:"IPPOOL_OWNER_KEY":' .. ARGV[4]" EOL		/* 14 */
+	/*
+	 *	For EXPIRE, Redis doesn't distinguish between
+	 *	"doesn't exist", and "doesn't have expiry"
+	 *	in 'XX' mode, so we still need to determine
+	 *	which of the two it is.
+	 *
+	 *	If 'SET' with 'GET' == nil then the key did
+	 *	not exist, and we just created it, otherwise
+	 *	it did exist, and just didn't have an expiry
+	 *	time.
+	 */
+	"if redis.call('EXPIRE', owner_key, ARGV[2], 'XX') ~= 0 or redis.call('SET', owner_key, ARGV[3], 'GET') == nil then" EOL		/* 15 */
+	"  local pool_key = '{' .. KEYS[1] .. '}:"IPPOOL_POOL_KEY"'" EOL		/* 16 */
+	"  redis.call('ZADD', pool_key, 'XX', ARGV[1] + ARGV[2], ARGV[3])" EOL		/* 17 */
+	"end" EOL									/* 16 */
 
 	/*
 	 *	Update the gateway address
 	 */
-	"if ARGV[5] ~= found[3] then" EOL						/* 21 */
-	"  redis.call('HSET', address_key, 'gateway', ARGV[5])" EOL			/* 22 */
-	"end" EOL									/* 23 */
-	"return { " STRINGIFY(_IPPOOL_RCODE_SUCCESS) ", found[1], found[4] }"EOL;	/* 24 */
+	"if ARGV[5] ~= found[3] then" EOL						/* 18 */
+	"  redis.call('HSET', address_key, 'gateway', ARGV[5])" EOL			/* 19 */
+	"end" EOL									/* 20 */
+	"return { " STRINGIFY(_IPPOOL_RCODE_SUCCESS) ", found[1], found[4] }"EOL;	/* 21 */
 static char lua_update_digest[(SHA1_DIGEST_LENGTH * 2) + 1];
 
 /** Lua script for releasing leases
@@ -334,10 +340,9 @@ static char lua_update_digest[(SHA1_DIGEST_LENGTH * 2) + 1];
  * - IPPOOL_RCODE_DEVICE_MISMATCH lease was allocated to a different client..
  */
 static char lua_release_cmd[] =
-	"local ret" EOL									/* 1 */
+	"local ttl" EOL									/* 1 */
 	"local found" EOL								/* 2 */
 
-	"local pool_key" EOL								/* 3 */
 	"local address_key" EOL								/* 4 */
 	"local owner_key" EOL								/* 5 */
 
@@ -354,18 +359,23 @@ static char lua_release_cmd[] =
 	"  return { " STRINGIFY(_IPPOOL_RCODE_DEVICE_MISMATCH) ", found[2] }" EOL	/* 13 */
 	"end" EOL									/* 14 */
 
+	"owner_key = '{' .. KEYS[1] .. '}:"IPPOOL_OWNER_KEY":' .. ARGV[3]" EOL		/* 15 */
+	"ttl = redis.call('TTL', owner_key)" EOL
+	"if ttl ~= -2 then"
+	"  local pool_key = '{' .. KEYS[1] .. '}:"IPPOOL_POOL_KEY"'" EOL		/* 16 */
 	/*
 	 *	Set expiry time to now() - 1
 	 */
-	"pool_key = '{' .. KEYS[1] .. '}:"IPPOOL_POOL_KEY"'" EOL			/* 15 */
-	"redis.call('ZADD', pool_key, 'XX', ARGV[1] - 1, ARGV[2])" EOL			/* 16 */
+	"  redis.call('ZADD', pool_key, 'XX', ARGV[1] - 1, ARGV[2])" EOL		/* 17 */
+	"  if ttl ~= -1 then"
+	"    redis.call('DEL', owner_key)" EOL
+	"  then"
+	"end"
 
 	/*
 	 *	Remove the association between the device and a lease
 	 */
-	"owner_key = '{' .. KEYS[1] .. '}:"IPPOOL_OWNER_KEY":' .. ARGV[3]" EOL	/* 17 */
-	"redis.call('DEL', owner_key)" EOL						/* 18 */
-	"return { " EOL
+	"return { " EOL									/* 18 */
 	"  " STRINGIFY(_IPPOOL_RCODE_SUCCESS) "," EOL					/* 19 */
 	"  redis.call('HINCRBY', address_key, 'counter', 1) - 1" EOL			/* 20 */
 	"}";										/* 21 */

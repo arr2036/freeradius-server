@@ -57,6 +57,7 @@ typedef enum {
 #define IPPOOL_POOL_KEY			"pool"
 #define IPPOOL_ADDRESS_KEY		"ip"
 #define IPPOOL_OWNER_KEY		"device"
+#define IPPOOL_INFINITE_LEASE		0xFFFFFFFF
 
 /** {prefix}:pool
  */
