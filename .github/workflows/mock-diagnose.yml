@@ -1,0 +1,12 @@
+name: mock-diagnose
+on:
+  workflow_call:
+    inputs:
+      results:
+        required: true
+        type: string
+jobs:
+  work:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "DIAGNOSE RAN with results = ${{ inputs.results }}"

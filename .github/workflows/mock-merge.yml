@@ -1,0 +1,8 @@
+name: mock-merge
+on:
+  workflow_call:
+jobs:
+  work:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "MERGE RAN - this should not happen when a leg failed"

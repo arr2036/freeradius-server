@@ -1,0 +1,32 @@
+name: parent-split
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  a:
+    uses: ./.github/workflows/child-pass.yml
+
+  b:
+    uses: ./.github/workflows/child-fail.yml
+
+  #
+  #  Does a job that calls a reusable workflow also accept needs:?
+  #  Expected: SKIPPED, because b failed and there is no if:.
+  #
+  merge_wf:
+    needs: [a, b]
+    uses: ./.github/workflows/mock-merge.yml
+    secrets: inherit
+
+  #
+  #  Does needs: + if: failure() + with: (carrying needs.*.result) work on a
+  #  uses: job?  Expected: RUNS, printing both results.
+  #
+  diagnose_wf:
+    needs: [a, b]
+    if: failure()
+    uses: ./.github/workflows/mock-diagnose.yml
+    with:
+      results: "a=${{ needs.a.result }} b=${{ needs.b.result }}"
+    secrets: inherit
