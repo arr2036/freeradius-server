@@ -1,0 +1,17 @@
+name: parent-matrix
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  #
+  #  Two questions at once:
+  #    1. is an expression allowed in uses: for a local reusable workflow?
+  #    2. if so, does fail-fast cancel the sibling leg that is still running?
+  #
+  legs:
+    strategy:
+      fail-fast: true
+      matrix:
+        kind: [quickfail, slow]
+    uses: ./.github/workflows/child-${{ matrix.kind }}.yml

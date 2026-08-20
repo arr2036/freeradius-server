@@ -1,0 +1,8 @@
+name: child-quickfail
+on:
+  workflow_call:
+jobs:
+  work:
+    runs-on: ubuntu-latest
+    steps:
+      - run: exit 1

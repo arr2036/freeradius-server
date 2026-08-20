@@ -1,0 +1,11 @@
+name: child-slow
+on:
+  workflow_call:
+jobs:
+  work:
+    runs-on: ubuntu-latest
+    steps:
+      #  A deliberate sleep, only so this leg is still running when the other
+      #  one fails. There is no other way to observe whether a sibling gets
+      #  cancelled.
+      - run: sleep 120; echo "slow leg finished uncancelled"
