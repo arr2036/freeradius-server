@@ -1,0 +1,15 @@
+name: child-pass
+on:
+  workflow_call:
+    outputs:
+      note:
+        description: "proves a reusable workflow can return a value to the caller"
+        value: ${{ jobs.work.outputs.note }}
+jobs:
+  work:
+    runs-on: ubuntu-latest
+    outputs:
+      note: ${{ steps.emit.outputs.note }}
+    steps:
+      - id: emit
+        run: echo "note=child-pass ran" >> "$GITHUB_OUTPUT"

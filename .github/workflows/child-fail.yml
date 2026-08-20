@@ -1,0 +1,10 @@
+name: child-fail
+on:
+  workflow_call:
+jobs:
+  work:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "failing on purpose so the caller can see a failed result"
+          exit 1

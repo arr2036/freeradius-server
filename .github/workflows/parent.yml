@@ -1,0 +1,48 @@
+name: parent
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  #
+  #  Two reusable workflows called as jobs. If needs: is rejected on a job
+  #  that uses:, the run fails to start and the answer is immediate.
+  #
+  a:
+    uses: ./.github/workflows/child-pass.yml
+
+  b:
+    uses: ./.github/workflows/child-fail.yml
+
+  #
+  #  The question that matters: does this wait for BOTH, and can it read
+  #  their results?  always() so it runs even though b fails.
+  #
+  gate:
+    needs: [a, b]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "a.result = ${{ needs.a.result }}"
+          echo "b.result = ${{ needs.b.result }}"
+          echo "a.outputs.note = ${{ needs.a.outputs.note }}"
+
+  #
+  #  What merge-upstream would become: runs only if every child passed.
+  #
+  merge_equivalent:
+    needs: [a, b]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "would merge"
+
+  #
+  #  What the diagnosis workflow would become: runs once, only on failure.
+  #
+  diagnose_equivalent:
+    needs: [a, b]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "would diagnose, failed = a:${{ needs.a.result }} b:${{ needs.b.result }}"
