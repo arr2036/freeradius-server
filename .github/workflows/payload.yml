@@ -1,0 +1,17 @@
+name: payload
+on:
+  push:
+jobs:
+  show:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Does the push payload carry changed files?
+        run: |
+          cat <<'JSON'
+          ${{ toJSON(github.event.head_commit) }}
+          JSON
+
+      #  If the payload has the file lists, this is the whole path test:
+      #  no checkout, no git diff, no shell.
+      - name: Expression-only path test
+        run: echo "packaging touched = ${{ contains(join(github.event.commits.*.modified, ' '), 'debian/') || contains(join(github.event.commits.*.added, ' '), 'debian/') }}"
