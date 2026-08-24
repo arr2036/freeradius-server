@@ -16,10 +16,9 @@ on:
         type: string
         default: '1'
       docker_registry:
-        description: "registry holding the CI images, the org's internal one or a fork's GHCR"
+        description: "registry holding the CI images, set by ci-pipeline.yml; a standalone run reads the variable instead"
         required: false
         type: string
-        default: ${{ vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}
   workflow_dispatch:
   schedule:
     - cron: '0 1 * * *'
@@ -76,19 +75,17 @@ jobs:
             display: self-hosted-docker-dind
             dockerfile: scripts/ci/docker/Dockerfile.docker-dind
             needs_internal_ca: true
-            selfhosted_only: true
 
     name: "${{ matrix.os.display }}"
 
     steps:
 
       - uses: actions/checkout@v6
-        if: ${{ env.SELFHOSTED == '1' || !matrix.os.selfhosted_only }}
         with:
           lfs: false
 
       - name: Login to Docker Hub
-        if: ${{ (env.SELFHOSTED == '1' || !matrix.os.selfhosted_only) && env.SELFHOSTED == '1' }}
+        if: ${{ env.SELFHOSTED == '1' }}
         uses: docker/login-action@v4
         with:
           username: ${{ vars.DOCKERHUB_READ_USER }}
@@ -106,11 +103,20 @@ jobs:
           done
           echo "FROM $DOCKER_BASE_IMAGE" | docker build --label preserve=true -t "$DOCKER_REGISTRY/$DOCKER_BASE_IMAGE" -
 
-      - name: Stage internal CA into build context
-        if: ${{ matrix.os.needs_internal_ca && env.SELFHOSTED == '1' }}
+      - name: Stage registry mirror CA into build context
+        if: ${{ matrix.os.needs_internal_ca }}
         run: |
-          cp /usr/local/share/ca-certificates/networkradius.com.crt \
-             scripts/ci/networkradius.com.crt
+          #
+          #  The Dockerfile COPYs this file unconditionally, so it has to
+          #  exist either way. Empty means "no mirror to trust" and the
+          #  Dockerfile skips the whole CA and mirror step.
+          #
+          if [ "$SELFHOSTED" = "1" ]; then
+            cp /usr/local/share/ca-certificates/networkradius.com.crt \
+               scripts/ci/networkradius.com.crt
+          else
+            : > scripts/ci/networkradius.com.crt
+          fi
 
       - name: Create build dependency package
         if: ${{ matrix.os.needs_build_deps }}
@@ -145,9 +151,16 @@ jobs:
           #  must not reuse layers.  A fork rebuilding per push wants the
           #  opposite or it pays 20+ minutes every time.
           NO_CACHE: ${{ env.SELFHOSTED == '1' && '--no-cache' || '' }}
+          #  Only the org's runners can reach the pull-through cache, so a
+          #  fork builds with no mirror and pulls from Docker Hub directly.
+          REGISTRY_MIRROR: ${{ env.SELFHOSTED == '1' && env.DOCKER_REGISTRY || '' }}
         run: |
+          build_args=()
+          if [ -n "$REGISTRY_MIRROR" ]; then
+            build_args+=(--build-arg "registry_mirror=$REGISTRY_MIRROR")
+          fi
           for attempt in 1 2 3; do
-            docker build $NO_CACHE -f "$DOCKERFILE" -t "$DOCKER_IMAGE_NAME" --label preserve=true . && exit 0
+            docker build $NO_CACHE -f "$DOCKERFILE" -t "$DOCKER_IMAGE_NAME" --label preserve=true "${build_args[@]}" . && exit 0
             echo "Build attempt $attempt failed; retrying after backoff..."
             sleep 10
           done
@@ -473,11 +486,20 @@ jobs:
       #  matrix entry that asks for it (currently the dind sidecar
       #  image, which needs to trust docker.internal.networkradius.com).
       #
-      - name: Stage internal CA into build context
-        if: ${{ matrix.os.needs_internal_ca && env.SELFHOSTED == '1' }}
+      - name: Stage registry mirror CA into build context
+        if: ${{ matrix.os.needs_internal_ca }}
         run: |
-          cp /usr/local/share/ca-certificates/networkradius.com.crt \
-             scripts/ci/networkradius.com.crt
+          #
+          #  The Dockerfile COPYs this file unconditionally, so it has to
+          #  exist either way. Empty means "no mirror to trust" and the
+          #  Dockerfile skips the whole CA and mirror step.
+          #
+          if [ "$SELFHOSTED" = "1" ]; then
+            cp /usr/local/share/ca-certificates/networkradius.com.crt \
+               scripts/ci/networkradius.com.crt
+          else
+            : > scripts/ci/networkradius.com.crt
+          fi
 
       #
       #  docker build's "exporting to image" phase occasionally trips a

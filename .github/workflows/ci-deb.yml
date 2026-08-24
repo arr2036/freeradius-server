@@ -4,10 +4,9 @@ on:
   workflow_call:
     inputs:
       docker_registry:
-        description: "registry holding the CI images, the org's internal one or a fork's GHCR"
-        required: false
+        description: "registry holding the CI images, set by ci-pipeline.yml"
+        required: true
         type: string
-        default: ${{ vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}
 
 env:
   DEBIAN_FRONTEND: noninteractive

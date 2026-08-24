@@ -1,32 +1,39 @@
 FROM docker:27-dind
 
 #
-#  Pre-bake the registry-mirror config so the dockerd inside this
-#  container pulls public base images via the internal NetworkRADIUS
-#  registry (which acts as a Docker Hub pull-through cache). Without
-#  this, every CI job's fresh dockerd anonymously pulls from
-#  registry-1.docker.io and the 31 self-hosted runners share egress
-#  IPs that quickly blow through Docker Hub's 100/6h anonymous limit.
+#  The org's self-hosted runners share egress IPs across all 31 machines, so
+#  anonymous pulls blow through Docker Hub's 100-per-6-hours limit. dockerd
+#  inside this container therefore pulls public base images through the
+#  internal registry, which acts as a Docker Hub pull-through cache.
 #
-RUN mkdir -p /etc/docker && cat > /etc/docker/daemon.json <<'EOF'
-{
-  "registry-mirrors": ["https://docker.internal.networkradius.com"]
-}
-EOF
+#  A fork has its own egress address and no route to that registry, so a fork
+#  builds with registry_mirror empty and dockerd pulls from Docker Hub
+#  directly. Everything below is skipped in that case.
+#
+ARG registry_mirror=
 
 #
-#  Trust the internal CA so dockerd can talk HTTPS to the mirror at
-#  docker.internal.networkradius.com. The base docker:dind image only
-#  has Alpine's default CA bundle, which doesn't include the internal
-#  NR root.
+#  COPY cannot be made conditional, so docker-refresh.yml always stages the
+#  file and writes an empty one when there is no mirror to trust.
 #
-#  The cert file is staged into the build context by docker-refresh.yml
-#  from /usr/local/share/ca-certificates/networkradius.com.crt on the
-#  runner host before this image is built.
+COPY scripts/ci/networkradius.com.crt /tmp/registry-mirror-ca.crt
+
 #
-COPY scripts/ci/networkradius.com.crt /usr/local/share/ca-certificates/networkradius.com.crt
-RUN apk add --no-cache ca-certificates && \
-    update-ca-certificates && \
-    mkdir -p /etc/docker/certs.d/docker.internal.networkradius.com && \
-    cp /usr/local/share/ca-certificates/networkradius.com.crt \
-       /etc/docker/certs.d/docker.internal.networkradius.com/ca.crt
+#  The base docker:dind image carries only Alpine's default CA bundle, which
+#  does not include the internal root, so dockerd cannot speak HTTPS to the
+#  mirror until the root is added. certs.d gets a copy as well because the
+#  docker client reads that path rather than the system bundle.
+#
+RUN if [ -n "$registry_mirror" ]; then \
+        mkdir -p /etc/docker && \
+        printf '{\n  "registry-mirrors": ["https://%s"]\n}\n' "$registry_mirror" \
+            > /etc/docker/daemon.json && \
+        apk add --no-cache ca-certificates && \
+        cp /tmp/registry-mirror-ca.crt \
+           /usr/local/share/ca-certificates/networkradius.com.crt && \
+        update-ca-certificates && \
+        mkdir -p "/etc/docker/certs.d/$registry_mirror" && \
+        cp /tmp/registry-mirror-ca.crt \
+           "/etc/docker/certs.d/$registry_mirror/ca.crt"; \
+    fi; \
+    rm -f /tmp/registry-mirror-ca.crt
