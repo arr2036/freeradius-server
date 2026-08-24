@@ -2,6 +2,12 @@ name: Docker crossbuild images
 
 on:
   workflow_call:
+    inputs:
+      docker_registry:
+        description: "registry holding the CI images, the org's internal one or a fork's GHCR"
+        required: false
+        type: string
+        default: ${{ vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}
   workflow_dispatch:
 
 env:
@@ -63,7 +69,7 @@ jobs:
         #  pointing at the internal NR registry as a Docker Hub
         #  pull-through mirror, and the internal CA pre-trusted.
         #
-        image: docker.internal.networkradius.com/self-hosted-docker-dind
+        image: ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/self-hosted-docker-dind
         options: --privileged
         env:
           DOCKER_TLS_CERTDIR: ""
@@ -89,12 +95,12 @@ jobs:
       #  Custom CI image with docker CLI / buildx / m4 baked on top
       #  of the self-hosted base.
       #
-      image: docker.internal.networkradius.com/self-hosted-docker-cli
+      image: ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/self-hosted-docker-cli
       env:
         DOCKER_HOST: tcp://dind:2375
         NO_PROXY: dind,*.networkradius.com,127.0.0.1
       #  CA cert mount lets the in-container apt and curl talk HTTPS
-      #  to docker.internal.networkradius.com. Shared workspace - see
+      #  to ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}. Shared workspace - see
       #  dind volumes comment above.
       volumes:
         - /usr/local/share/ca-certificates/networkradius.com.crt:/usr/local/share/ca-certificates/networkradius.com.crt:ro
@@ -116,7 +122,7 @@ jobs:
 
     #
     #  The dind sidecar has its own dockerd that's not pre-authenticated
-    #  to docker.internal.networkradius.com (the host docker daemon on
+    #  to ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }} (the host docker daemon on
     #  the self-hosted runner is, via the runner's job-started hook,
     #  but that auth doesn't propagate into the dind container). Log in
     #  explicitly so the inner crossbuild's FROM-pull of self-hosted-*
@@ -127,7 +133,7 @@ jobs:
         DOCKER_USERNAME: ${{ secrets.DOCKER_REPO_USERNAME }}
         DOCKER_PASSWORD: ${{ secrets.DOCKER_REPO_PASSWORD }}
       run: |
-        echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin https://docker.internal.networkradius.com/
+        echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin https://${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/
 
     #
     #  Run the per-distro crossbuild. CB_FROM_<distro> overrides the
@@ -139,12 +145,12 @@ jobs:
     #
     - name: Run crossbuild tests
       env:
-        CB_FROM_debian13:  docker.internal.networkradius.com/self-hosted-ci-debian13
-        CB_FROM_debiansid: docker.internal.networkradius.com/self-hosted-ci-debiansid
-        CB_FROM_ubuntu24:  docker.internal.networkradius.com/self-hosted-ci-ubuntu24
-        CB_FROM_ubuntu26:  docker.internal.networkradius.com/self-hosted-ci-ubuntu26
-        CB_FROM_rocky9:    docker.internal.networkradius.com/self-hosted-ci-rocky9
-        CB_FROM_rocky10:   docker.internal.networkradius.com/self-hosted-ci-rocky10
+        CB_FROM_debian13:  ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/self-hosted-ci-debian13
+        CB_FROM_debiansid: ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/self-hosted-ci-debiansid
+        CB_FROM_ubuntu24:  ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/self-hosted-ci-ubuntu24
+        CB_FROM_ubuntu26:  ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/self-hosted-ci-ubuntu26
+        CB_FROM_rocky9:    ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/self-hosted-ci-rocky9
+        CB_FROM_rocky10:   ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/self-hosted-ci-rocky10
       run: |
         make dockerfile.crossbuild.check
         make crossbuild.$OS

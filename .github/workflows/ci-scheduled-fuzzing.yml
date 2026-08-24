@@ -143,7 +143,7 @@ jobs:
     runs-on: self-hosted
 
     container:
-      image: docker.internal.networkradius.com/self-hosted
+      image: ${{ vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/self-hosted
 
     defaults:
       run:

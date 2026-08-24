@@ -28,7 +28,18 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       images: ${{ steps.check.outputs.images }}
+      docker_registry: ${{ steps.registry.outputs.docker_registry }}
     steps:
+      #
+      #  Where the CI images live. The org sets the DOCKER_REGISTRY variable
+      #  to its internal registry; a fork leaves the variable unset and falls
+      #  back to its own GHCR, which is the only registry a fork can push to.
+      #  Every workflow below is handed the answer so the decision is made
+      #  here and nowhere else.
+      #
+      - id: registry
+        run: echo "docker_registry=${{ vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}" >> "$GITHUB_OUTPUT"
+
       #  paths-filter diffs (below) needs a checkout of the repository.
       - uses: actions/checkout@v6
         with:
@@ -73,6 +84,7 @@ jobs:
     if: ${{ needs.changes.outputs.images == 'true' || github.repository_owner != 'FreeRADIUS' }}
     uses: ./.github/workflows/docker-refresh.yml
     with:
+      docker_registry: ${{ needs.changes.outputs.docker_registry }}
       selfhosted: ${{ github.repository_owner == 'FreeRADIUS' && '1' || '0' }}
     secrets: inherit
 
@@ -82,16 +94,19 @@ jobs:
     name: CI
     uses: ./.github/workflows/ci.yml
     with:
+      docker_registry: ${{ needs.changes.outputs.docker_registry }}
       selfhosted: ${{ github.repository_owner == 'FreeRADIUS' && '1' || '0' }}
-      docker_prefix: ${{ github.repository_owner == 'FreeRADIUS' && 'docker.internal.networkradius.com/' || '' }}
+      docker_prefix: ${{ github.repository_owner == 'FreeRADIUS' && format('{0}/', vars.DOCKER_REGISTRY) || '' }}
       packaging_changed: ${{ needs.changes.outputs.images }}
     secrets: inherit
 
   ci-deb:
-    needs: [refresh]
+    needs: [changes, refresh]
     if: ${{ !cancelled() && needs.refresh.result != 'failure' }}
     name: CI DEB
     uses: ./.github/workflows/ci-deb.yml
+    with:
+      docker_registry: ${{ needs.changes.outputs.docker_registry }}
     secrets: inherit
 
   ci-rpm:
@@ -100,6 +115,7 @@ jobs:
     name: CI RPM
     uses: ./.github/workflows/ci-rpm.yml
     with:
+      docker_registry: ${{ needs.changes.outputs.docker_registry }}
       packaging_changed: ${{ needs.changes.outputs.images }}
     secrets: inherit
 
@@ -109,8 +125,9 @@ jobs:
     name: CI-Sanitizers
     uses: ./.github/workflows/ci-sanitizers.yml
     with:
+      docker_registry: ${{ needs.changes.outputs.docker_registry }}
       selfhosted: ${{ github.repository_owner == 'FreeRADIUS' && '1' || '0' }}
-      docker_prefix: ${{ github.repository_owner == 'FreeRADIUS' && 'docker.internal.networkradius.com/' || '' }}
+      docker_prefix: ${{ github.repository_owner == 'FreeRADIUS' && format('{0}/', vars.DOCKER_REGISTRY) || '' }}
       packaging_changed: ${{ needs.changes.outputs.images }}
     secrets: inherit
 
@@ -133,24 +150,30 @@ jobs:
     secrets: inherit
 
   ci-multi-server:
-    needs: [refresh]
+    needs: [changes, refresh]
     if: ${{ !cancelled() && needs.refresh.result != 'failure' }}
     name: Multi-Server CI Tests
     uses: ./.github/workflows/ci-multi-server-tests.yml
+    with:
+      docker_registry: ${{ needs.changes.outputs.docker_registry }}
     secrets: inherit
 
   docker-crossbuild:
     name: Docker crossbuild images
-    needs: [refresh, ci]
+    needs: [changes, refresh, ci]
     if: ${{ !cancelled() && needs.refresh.result != 'failure' && needs.ci.result == 'success' }}
     uses: ./.github/workflows/docker-crossbuild.yml
+    with:
+      docker_registry: ${{ needs.changes.outputs.docker_registry }}
     secrets: inherit
 
   docker-service:
     name: Docker service images
-    needs: [refresh, ci]
+    needs: [changes, refresh, ci]
     if: ${{ !cancelled() && needs.refresh.result != 'failure' && needs.ci.result == 'success' }}
     uses: ./.github/workflows/docker-service.yml
+    with:
+      docker_registry: ${{ needs.changes.outputs.docker_registry }}
     secrets: inherit
 
   #

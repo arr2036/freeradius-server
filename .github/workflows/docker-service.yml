@@ -2,6 +2,12 @@ name: Docker service images
 
 on:
   workflow_call:
+    inputs:
+      docker_registry:
+        description: "registry holding the CI images, the org's internal one or a fork's GHCR"
+        required: false
+        type: string
+        default: ${{ vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}
   workflow_dispatch:
 
 env:
@@ -63,7 +69,7 @@ jobs:
         #  pointing at the internal NR registry as a Docker Hub
         #  pull-through mirror, and the internal CA pre-trusted.
         #
-        image: docker.internal.networkradius.com/self-hosted-docker-dind
+        image: ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/self-hosted-docker-dind
         options: --privileged
         env:
           DOCKER_TLS_CERTDIR: ""
@@ -87,12 +93,12 @@ jobs:
       #  Custom CI image with docker CLI / buildx / m4 baked on top
       #  of the self-hosted base.
       #
-      image: docker.internal.networkradius.com/self-hosted-docker-cli
+      image: ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/self-hosted-docker-cli
       env:
         DOCKER_HOST: tcp://dind:2375
         NO_PROXY: dind,*.networkradius.com,127.0.0.1
       #  CA cert mount lets the in-container apt and curl talk HTTPS
-      #  to docker.internal.networkradius.com. Shared workspace - see
+      #  to ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}. Shared workspace - see
       #  dind volumes comment above.
       volumes:
         - /usr/local/share/ca-certificates/networkradius.com.crt:/usr/local/share/ca-certificates/networkradius.com.crt:ro
@@ -114,7 +120,7 @@ jobs:
 
     #
     #  Authenticate dind to Docker Hub. self-hosted-docker-dind has
-    #  registry-mirrors -> docker.internal.networkradius.com baked
+    #  registry-mirrors -> ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }} baked
     #  in, but our internal registry isn't actually a Hub pull-
     #  through cache, so FROM ubuntu:24.04 etc. inside the build
     #  falls back to docker.io and would otherwise hit anonymous
@@ -137,7 +143,7 @@ jobs:
         DOCKER_USERNAME: ${{ secrets.DOCKER_REPO_USERNAME }}
         DOCKER_PASSWORD: ${{ secrets.DOCKER_REPO_PASSWORD }}
       run: |
-        echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin https://docker.internal.networkradius.com/
+        echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin https://${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/
 
     - name: Verify Dockerfiles match m4 templates
       run: |
@@ -157,7 +163,7 @@ jobs:
     #
     - name: Build docker images
       env:
-        DOCKER_REGISTRY: docker.internal.networkradius.com
+        DOCKER_REGISTRY: ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}
       run: |
         make docker.service.$OS
         make docker.profiling.$OS

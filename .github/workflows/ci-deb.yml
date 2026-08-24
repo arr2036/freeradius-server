@@ -2,6 +2,12 @@ name: CI DEB
 
 on:
   workflow_call:
+    inputs:
+      docker_registry:
+        description: "registry holding the CI images, the org's internal one or a fork's GHCR"
+        required: false
+        type: string
+        default: ${{ vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}
 
 env:
   DEBIAN_FRONTEND: noninteractive
@@ -36,10 +42,10 @@ jobs:
           M=$(cat <<EOF
           {
             "env": [
-              { "NAME": "ubuntu-24.04", "OS": "ubuntu:24.04",    "BUILD_IMAGE": "docker.internal.networkradius.com/self-hosted-ci-ubuntu24"   },
-              { "NAME": "ubuntu-26.04", "OS": "ubuntu:26.04",    "BUILD_IMAGE": "docker.internal.networkradius.com/self-hosted-ci-ubuntu26"   },
-              { "NAME": "debian-13",    "OS": "debian:trixie",   "BUILD_IMAGE": "docker.internal.networkradius.com/self-hosted-ci-debian13"   },
-              { "NAME": "debian-sid",   "OS": "debian:sid",      "BUILD_IMAGE": "docker.internal.networkradius.com/self-hosted-ci-debiansid"  }
+              { "NAME": "ubuntu-24.04", "OS": "ubuntu:24.04",    "BUILD_IMAGE": "${{ inputs.docker_registry }}/self-hosted-ci-ubuntu24"   },
+              { "NAME": "ubuntu-26.04", "OS": "ubuntu:26.04",    "BUILD_IMAGE": "${{ inputs.docker_registry }}/self-hosted-ci-ubuntu26"   },
+              { "NAME": "debian-13",    "OS": "debian:trixie",   "BUILD_IMAGE": "${{ inputs.docker_registry }}/self-hosted-ci-debian13"   },
+              { "NAME": "debian-sid",   "OS": "debian:sid",      "BUILD_IMAGE": "${{ inputs.docker_registry }}/self-hosted-ci-debiansid"  }
             ]
           }
         EOF
@@ -48,7 +54,7 @@ jobs:
           M=$(cat <<EOF
           {
             "env": [
-              { "NAME": "debian-13",    "OS": "debian:trixie",   "BUILD_IMAGE": "docker.internal.networkradius.com/self-hosted-ci-debian13" }
+              { "NAME": "debian-13",    "OS": "debian:trixie",   "BUILD_IMAGE": "${{ inputs.docker_registry }}/self-hosted-ci-debian13" }
             ]
           }
         EOF

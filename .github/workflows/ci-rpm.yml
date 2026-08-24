@@ -3,6 +3,11 @@ name: CI RPM
 on:
   workflow_call:
     inputs:
+      docker_registry:
+        description: "registry holding the CI images, the org's internal one or a fork's GHCR"
+        required: false
+        type: string
+        default: ${{ vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}
       packaging_changed:
         description: "'true' when this commit touches redhat/**, so the image's baked builddep closure may be stale"
         required: false
@@ -39,8 +44,8 @@ jobs:
           M=$(cat <<EOF
           {
             "env": [
-              { "NAME": "rocky-9",  "OS": "rockylinux/rockylinux:9",  "BUILD_IMAGE": "docker.internal.networkradius.com/self-hosted-ci-rocky9",  "DIST": "rocky", "VERSION": 9  },
-              { "NAME": "rocky-10", "OS": "rockylinux/rockylinux:10", "BUILD_IMAGE": "docker.internal.networkradius.com/self-hosted-ci-rocky10", "DIST": "rocky", "VERSION": 10 }
+              { "NAME": "rocky-9",  "OS": "rockylinux/rockylinux:9",  "BUILD_IMAGE": "${{ inputs.docker_registry }}/self-hosted-ci-rocky9",  "DIST": "rocky", "VERSION": 9  },
+              { "NAME": "rocky-10", "OS": "rockylinux/rockylinux:10", "BUILD_IMAGE": "${{ inputs.docker_registry }}/self-hosted-ci-rocky10", "DIST": "rocky", "VERSION": 10 }
             ]
           }
         EOF
@@ -49,7 +54,7 @@ jobs:
           M=$(cat <<EOF
           {
             "env": [
-              { "NAME": "rocky-9",  "OS": "rockylinux/rockylinux:9",  "BUILD_IMAGE": "docker.internal.networkradius.com/self-hosted-ci-rocky9",  "DIST": "rocky", "VERSION": 9 }
+              { "NAME": "rocky-9",  "OS": "rockylinux/rockylinux:9",  "BUILD_IMAGE": "${{ inputs.docker_registry }}/self-hosted-ci-rocky9",  "DIST": "rocky", "VERSION": 9 }
             ]
           }
         EOF

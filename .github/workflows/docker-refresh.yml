@@ -15,6 +15,11 @@ on:
         required: false
         type: string
         default: '1'
+      docker_registry:
+        description: "registry holding the CI images, the org's internal one or a fork's GHCR"
+        required: false
+        type: string
+        default: ${{ vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}
   workflow_dispatch:
   schedule:
     - cron: '0 1 * * *'
@@ -35,7 +40,7 @@ concurrency:
 #  DOCKER_REGISTRY.
 #
 env:
-  DOCKER_REGISTRY: ${{ (inputs.selfhosted || '1') == '1' && 'docker.internal.networkradius.com' || format('ghcr.io/{0}', github.repository_owner) }}
+  DOCKER_REGISTRY: ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}
   SELFHOSTED: ${{ inputs.selfhosted || '1' }}
 
 jobs:
@@ -102,7 +107,7 @@ jobs:
           echo "FROM $DOCKER_BASE_IMAGE" | docker build --label preserve=true -t "$DOCKER_REGISTRY/$DOCKER_BASE_IMAGE" -
 
       - name: Stage internal CA into build context
-        if: ${{ matrix.os.needs_internal_ca }}
+        if: ${{ matrix.os.needs_internal_ca && env.SELFHOSTED == '1' }}
         run: |
           cp /usr/local/share/ca-certificates/networkradius.com.crt \
              scripts/ci/networkradius.com.crt
@@ -222,9 +227,9 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - parent_image: docker.internal.networkradius.com/self-hosted
+          - parent_image: ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/self-hosted
             display: self-hosted-docker-cli
-            image_name: docker.internal.networkradius.com/self-hosted-docker-cli
+            image_name: ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/self-hosted-docker-cli
             dockerfile: scripts/ci/docker/Dockerfile.docker-cli
 
     name: "${{ matrix.os.display }}"
@@ -297,7 +302,7 @@ jobs:
 
     services:
       dind:
-        image: docker.internal.networkradius.com/self-hosted-docker-dind
+        image: ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/self-hosted-docker-dind
         options: --privileged
         env:
           DOCKER_TLS_CERTDIR: ""
@@ -306,7 +311,7 @@ jobs:
           - ${{ github.workspace }}:/workspace
 
     container:
-      image: docker.internal.networkradius.com/self-hosted-docker-cli
+      image: ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/self-hosted-docker-cli
       env:
         DOCKER_HOST: tcp://dind:2375
         NO_PROXY: dind,*.networkradius.com,127.0.0.1
@@ -332,32 +337,32 @@ jobs:
           #
           - base_image: rockylinux/rockylinux:9
             display: self-hosted-ci-rocky9
-            image_name: docker.internal.networkradius.com/self-hosted-ci-rocky9
+            image_name: ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/self-hosted-ci-rocky9
             dockerfile: scripts/docker/build/rocky9/Dockerfile.ci
 
           - base_image: rockylinux/rockylinux:10
             display: self-hosted-ci-rocky10
-            image_name: docker.internal.networkradius.com/self-hosted-ci-rocky10
+            image_name: ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/self-hosted-ci-rocky10
             dockerfile: scripts/docker/build/rocky10/Dockerfile.ci
 
           - base_image: debian:trixie
             display: self-hosted-ci-debian13
-            image_name: docker.internal.networkradius.com/self-hosted-ci-debian13
+            image_name: ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/self-hosted-ci-debian13
             dockerfile: scripts/docker/build/debian13/Dockerfile.ci
 
           - base_image: debian:sid
             display: self-hosted-ci-debiansid
-            image_name: docker.internal.networkradius.com/self-hosted-ci-debiansid
+            image_name: ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/self-hosted-ci-debiansid
             dockerfile: scripts/docker/build/debiansid/Dockerfile.ci
 
           - base_image: ubuntu:24.04
             display: self-hosted-ci-ubuntu24
-            image_name: docker.internal.networkradius.com/self-hosted-ci-ubuntu24
+            image_name: ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/self-hosted-ci-ubuntu24
             dockerfile: scripts/docker/build/ubuntu24/Dockerfile.ci
 
           - base_image: ubuntu:26.04
             display: self-hosted-ci-ubuntu26
-            image_name: docker.internal.networkradius.com/self-hosted-ci-ubuntu26
+            image_name: ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/self-hosted-ci-ubuntu26
             dockerfile: scripts/docker/build/ubuntu26/Dockerfile.ci
 
           - base_image: mariadb
@@ -469,7 +474,7 @@ jobs:
       #  image, which needs to trust docker.internal.networkradius.com).
       #
       - name: Stage internal CA into build context
-        if: ${{ matrix.os.needs_internal_ca }}
+        if: ${{ matrix.os.needs_internal_ca && env.SELFHOSTED == '1' }}
         run: |
           cp /usr/local/share/ca-certificates/networkradius.com.crt \
              scripts/ci/networkradius.com.crt
@@ -588,7 +593,7 @@ jobs:
 
     services:
       dind:
-        image: docker.internal.networkradius.com/self-hosted-docker-dind
+        image: ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/self-hosted-docker-dind
         options: --privileged
         env:
           DOCKER_TLS_CERTDIR: ""
@@ -597,7 +602,7 @@ jobs:
           - ${{ github.workspace }}:/workspace
 
     container:
-      image: docker.internal.networkradius.com/self-hosted-docker-cli
+      image: ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}/self-hosted-docker-cli
       env:
         DOCKER_HOST: tcp://dind:2375
         NO_PROXY: dind,*.networkradius.com,127.0.0.1
@@ -689,7 +694,7 @@ jobs:
       - name: Push freeradius4-{crossbuild,profiling-deps,service}:latest
         env:
           OS: ${{ matrix.os }}
-          REGISTRY: docker.internal.networkradius.com
+          REGISTRY: ${{ inputs.docker_registry || vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}
         run: |
           for type in crossbuild profiling-deps service; do
             local_tag="freeradius4-${type}/${OS}:latest"

@@ -3,6 +3,11 @@ name: CI-Sanitizers
 on:
   workflow_call:
     inputs:
+      docker_registry:
+        description: "registry holding the CI images, the org's internal one or a fork's GHCR"
+        required: false
+        type: string
+        default: ${{ vars.DOCKER_REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}
       selfhosted:
         description: "'1' when the org's self-hosted runners and registry are available"
         required: true
@@ -64,7 +69,7 @@ jobs:
         #  name    - used in the job name only
         os:
           - runs_on: "${{ inputs.selfhosted == '1' && 'self-hosted' || 'ubuntu-24.04' }}"
-            docker: "${{ inputs.selfhosted == '1' && 'docker.internal.networkradius.com/self-hosted' || format('ghcr.io/{0}/self-hosted', github.repository_owner) }}"
+            docker: "${{ inputs.docker_registry }}/self-hosted"
             name: "${{ inputs.selfhosted == '1' && 'self' || 'gh' }}-ubuntu24"
             code: "ubuntu2404"
             imageos: "ubuntu24"
